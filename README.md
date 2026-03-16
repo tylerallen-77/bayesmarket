@@ -478,8 +478,8 @@ All parameters are in `bayesmarket/config.py`. Key settings:
 |-----------|-------|---------|
 | `threshold_5m` | 1.0 - 15.0 | 7.0 |
 | `bias_threshold` | 1.0 - 10.0 | 3.0 |
-| `vwap_sensitivity` | 1.0 - 500.0 | 150.0 |
-| `poc_sensitivity` | 1.0 - 500.0 | 150.0 |
+| `vwap_sensitivity` | 1.0 - 500.0 | 20.0 |
+| `poc_sensitivity` | 1.0 - 500.0 | 20.0 |
 
 ---
 

@@ -40,8 +40,11 @@ def compute_signal(state: MarketState, tf_name: str) -> SignalSnapshot:
     snap.depth_ratio, snap.depth_score = compute_depth_score(state)
 
     # ── Category B: Structure ──────────────────────────────────────
-    snap.vwap_value, snap.vwap_score = compute_vwap(tf_state.klines, mid)
-    snap.poc_value, snap.poc_score = compute_poc(tf_state.klines, mid)
+    rt = state.runtime
+    vwap_sens = rt.vwap_sensitivity if rt else config.VWAP_SENSITIVITY
+    poc_sens = rt.poc_sensitivity if rt else config.POC_SENSITIVITY
+    snap.vwap_value, snap.vwap_score = compute_vwap(tf_state.klines, mid, vwap_sens)
+    snap.poc_value, snap.poc_score = compute_poc(tf_state.klines, mid, poc_sens)
     snap.ha_streak, snap.ha_score = compute_ha_score(tf_state.klines)
 
     # ── Regime ────────────────────────────────────────────────────

@@ -340,8 +340,8 @@ def build_handlers(state: "MarketState", rt: "RuntimeConfig") -> list:
                 "Params:\n"
                 "  `threshold_5m` — trigger scoring threshold (default 7.0)\n"
                 "  `bias_threshold` — 4h cascade bias threshold (default 3.0)\n"
-                "  `vwap_sensitivity` — VWAP sensitivity (default 150.0)\n"
-                "  `poc_sensitivity` — POC sensitivity (default 150.0)",
+                "  `vwap_sensitivity` — VWAP sensitivity (default 20.0)\n"
+                "  `poc_sensitivity` — POC sensitivity (default 20.0)",
                 parse_mode="Markdown"
             )
             return

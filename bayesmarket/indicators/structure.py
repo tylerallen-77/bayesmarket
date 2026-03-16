@@ -12,7 +12,7 @@ from bayesmarket.data.state import Candle
 logger = structlog.get_logger()
 
 
-def compute_vwap(klines: deque, mid_price: float) -> tuple[float, float]:
+def compute_vwap(klines: deque, mid_price: float, sensitivity: Optional[float] = None) -> tuple[float, float]:
     """Compute VWAP and proportional score.
 
     Returns (vwap_value, vwap_score).
@@ -32,14 +32,15 @@ def compute_vwap(klines: deque, mid_price: float) -> tuple[float, float]:
     if total_vol <= 0:
         return 0.0, 0.0
 
+    sens = sensitivity if sensitivity is not None else config.VWAP_SENSITIVITY
     vwap = total_tp_vol / total_vol
     deviation = (mid_price - vwap) / vwap
-    vwap_score = max(-1.5, min(1.5, deviation * config.VWAP_SENSITIVITY))
+    vwap_score = max(-1.5, min(1.5, deviation * sens))
 
     return vwap, vwap_score
 
 
-def compute_poc(klines: deque, mid_price: float) -> tuple[float, float]:
+def compute_poc(klines: deque, mid_price: float, sensitivity: Optional[float] = None) -> tuple[float, float]:
     """Compute Point of Control (highest volume price bin) and proportional score.
 
     Returns (poc_value, poc_score).
@@ -80,8 +81,9 @@ def compute_poc(klines: deque, mid_price: float) -> tuple[float, float]:
     poc_bin = int(np.argmax(volume_bins))
     poc = lo + (poc_bin + 0.5) * bin_size
 
+    sens = sensitivity if sensitivity is not None else config.POC_SENSITIVITY
     deviation = (mid_price - poc) / poc if poc > 0 else 0.0
-    poc_score = max(-1.5, min(1.5, deviation * config.POC_SENSITIVITY))
+    poc_score = max(-1.5, min(1.5, deviation * sens))
 
     return poc, poc_score
 
