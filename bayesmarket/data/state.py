@@ -157,6 +157,10 @@ class Position:
     last_swing_low: Optional[float] = None
     last_swing_high: Optional[float] = None
 
+    # Trailing stop state (MOD-5: activated after TP1 hit)
+    trailing_active: bool = False
+    trailing_high_water: float = 0.0  # best price since TP1 hit (LONG: highest, SHORT: lowest)
+
     # Manual force-close flag (set via Telegram /close command)
     _force_close: bool = False
 

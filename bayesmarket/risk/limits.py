@@ -1,14 +1,13 @@
 """Daily loss limit, cooldown state machine, circuit breakers.
 
-Fixes:
-  - check_daily_reset: use date comparison instead of minute-exact check
-    Prevents missing reset due to event loop timing drift.
-  - update_after_trade: fire Telegram risk alerts (non-blocking)
+FIX CRITICAL-2: Removed asyncio.create_task() from synchronous functions.
+  can_trade() and update_after_trade() now return pending alerts as list.
+  Caller (async context) is responsible for firing them.
 """
 
-import asyncio
 import time
 from datetime import date, datetime, timezone
+from typing import Optional
 
 import structlog
 
@@ -21,22 +20,24 @@ logger = structlog.get_logger()
 _last_reset_date: date = date.min
 
 
-def can_trade(risk: RiskState, capital: float) -> tuple[bool, str]:
+def can_trade(risk: RiskState, capital: float) -> tuple[bool, str, list[tuple[str, str]]]:
     """Check if trading is currently allowed. Handles state expiry.
 
-    Returns (allowed, reason).
+    Returns (allowed, reason, pending_alerts).
+    Caller must fire pending_alerts via asyncio.create_task.
     """
     now = time.time()
+    alerts: list[tuple[str, str]] = []
 
     # Expire full stop
     if risk.full_stop_active:
         if now >= risk.full_stop_until:
             risk.full_stop_active = False
             logger.info("full_stop_expired")
-            asyncio.create_task(_alert_risk("full_stop_reset", "Full stop expired, trading resumed"))
+            alerts.append(("full_stop_reset", "Full stop expired, trading resumed"))
         else:
             remaining = risk.full_stop_until - now
-            return False, f"full_stop ({remaining:.0f}s remaining)"
+            return False, f"full_stop ({remaining:.0f}s remaining)", alerts
 
     # Expire daily pause
     if risk.daily_paused:
@@ -45,7 +46,7 @@ def can_trade(risk: RiskState, capital: float) -> tuple[bool, str]:
             logger.info("daily_pause_expired")
         else:
             remaining = risk.daily_pause_until - now
-            return False, f"daily_paused ({remaining:.0f}s remaining)"
+            return False, f"daily_paused ({remaining:.0f}s remaining)", alerts
 
     # Expire cooldown timeout
     if risk.cooldown_active:
@@ -54,7 +55,7 @@ def can_trade(risk: RiskState, capital: float) -> tuple[bool, str]:
             risk.cooldown_active = False
             risk.consecutive_losses = 0
             logger.info("cooldown_time_reset", elapsed_s=round(elapsed, 0))
-            asyncio.create_task(_alert_risk("cooldown_reset", f"Cooldown expired after {elapsed/60:.0f}m"))
+            alerts.append(("cooldown_reset", f"Cooldown expired after {elapsed/60:.0f}m"))
 
     # Check daily loss limit
     if capital > 0 and risk.daily_pnl <= -(capital * config.DAILY_LOSS_LIMIT):
@@ -65,15 +66,19 @@ def can_trade(risk: RiskState, capital: float) -> tuple[bool, str]:
             f"limit={config.DAILY_LOSS_LIMIT*100:.0f}% "
             f"pause={config.DAILY_PAUSE_HOURS}h"
         )
-        logger.warning("daily_limit_triggered", **{k: v for k, v in [p.split("=") for p in msg.split()]})
-        asyncio.create_task(_alert_risk("daily_pause", msg))
-        return False, "daily_loss_limit"
+        logger.warning("daily_limit_triggered", daily_pnl=risk.daily_pnl)
+        alerts.append(("daily_pause", msg))
+        return False, "daily_loss_limit", alerts
 
-    return True, "ok"
+    return True, "ok", alerts
 
 
-def update_after_trade(risk: RiskState, pnl: float, capital: float) -> None:
-    """Update risk state after a trade completes."""
+def update_after_trade(risk: RiskState, pnl: float, capital: float) -> list[tuple[str, str]]:
+    """Update risk state after a trade completes.
+
+    Returns list of pending alerts for caller to fire.
+    """
+    alerts: list[tuple[str, str]] = []
     risk.daily_pnl += pnl
     risk.trades_today += 1
 
@@ -92,7 +97,7 @@ def update_after_trade(risk: RiskState, pnl: float, capital: float) -> None:
                     f"duration={config.FULL_STOP_DURATION_SECONDS/3600:.1f}h"
                 )
                 logger.warning("full_stop_activated", consecutive_losses=risk.consecutive_losses)
-                asyncio.create_task(_alert_risk("full_stop", msg))
+                alerts.append(("full_stop", msg))
             else:
                 risk.cooldown_active = True
                 risk.cooldown_start_time = time.time()
@@ -101,7 +106,7 @@ def update_after_trade(risk: RiskState, pnl: float, capital: float) -> None:
                     f"size_mult={config.COOLDOWN_SIZE_MULTIPLIER}"
                 )
                 logger.warning("cooldown_activated", consecutive_losses=risk.consecutive_losses)
-                asyncio.create_task(_alert_risk("cooldown", msg))
+                alerts.append(("cooldown", msg))
     else:
         risk.consecutive_wins += 1
         risk.consecutive_losses = 0
@@ -109,7 +114,7 @@ def update_after_trade(risk: RiskState, pnl: float, capital: float) -> None:
         if risk.cooldown_active and risk.consecutive_wins >= config.COOLDOWN_RESET_WINS:
             risk.cooldown_active = False
             logger.info("cooldown_win_reset", consecutive_wins=risk.consecutive_wins)
-            asyncio.create_task(_alert_risk("cooldown_reset", f"Cooldown reset after {risk.consecutive_wins} wins"))
+            alerts.append(("cooldown_reset", f"Cooldown reset after {risk.consecutive_wins} wins"))
 
     logger.info(
         "risk_updated",
@@ -119,6 +124,7 @@ def update_after_trade(risk: RiskState, pnl: float, capital: float) -> None:
         consec_wins=risk.consecutive_wins,
         cooldown=risk.cooldown_active,
     )
+    return alerts
 
 
 def check_daily_reset(risk: RiskState) -> None:
@@ -132,14 +138,9 @@ def check_daily_reset(risk: RiskState) -> None:
 
     today_utc = datetime.now(timezone.utc).date()
 
-    # Only reset once per UTC calendar day
+    # FIX MOD-1: Only check date, not hour. Previous hour check could miss
+    # reset window if bot restarted after DAILY_RESET_HOUR_UTC.
     if today_utc <= _last_reset_date:
-        return
-
-    # Only reset after UTC midnight (hour >= 0 is always true, but
-    # ensure we don't reset mid-session on first run)
-    now_utc = datetime.now(timezone.utc)
-    if now_utc.hour != config.DAILY_RESET_HOUR_UTC:
         return
 
     _last_reset_date = today_utc

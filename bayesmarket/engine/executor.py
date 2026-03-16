@@ -57,7 +57,9 @@ def _evaluate_entry(state: MarketState, storage: Storage) -> None:
 
     # ── Risk gate: use can_trade() to handle state expiry ────────
     from bayesmarket.risk.limits import can_trade
-    allowed, reason = can_trade(state.risk, state.capital)
+    allowed, reason, risk_alerts = can_trade(state.risk, state.capital)
+    for event, details in risk_alerts:
+        asyncio.create_task(_fire_risk_alert(event, details))
     if not allowed:
         return
 
@@ -314,6 +316,10 @@ def _monitor_position(state: MarketState, storage: Storage) -> None:
                 asyncio.create_task(_send_exit_alert(pos, mid, total_pnl, pnl_pct, "time_exit", mode, diagnosis=diag))
             return
 
+    # ── Trailing stop after TP1 (MOD-5) ───────────────────────────
+    if config.TRAILING_STOP_ENABLED and pos.tp1_hit and not pos.tp2_hit:
+        _update_trailing_stop(state, pos, mid)
+
     # ── Wall health + structural SL tightening ────────────────────
     _monitor_sl_wall_health(state, pos)
     _check_structural_sl_tighten(state, pos)
@@ -394,7 +400,9 @@ def _close_position(
 
     from bayesmarket.risk.limits import update_after_trade
     total_pnl = pos.pnl_realized + pnl
-    update_after_trade(state.risk, total_pnl, state.capital)
+    risk_alerts = update_after_trade(state.risk, total_pnl, state.capital)
+    for event, details in risk_alerts:
+        asyncio.create_task(_fire_risk_alert(event, details))
 
     rt = state.runtime
     mode = "LIVE" if (rt and rt.live_mode) else "SHADOW"
@@ -461,6 +469,15 @@ async def _send_exit_alert(
         logger.error("exit_alert_failed", error=str(exc))
 
 
+async def _fire_risk_alert(event: str, details: str) -> None:
+    """Fire Telegram risk alert (non-blocking, silent-fail)."""
+    try:
+        from bayesmarket.telegram_bot.alerts import alert_risk_event
+        await alert_risk_event(event, details)
+    except Exception:
+        pass
+
+
 # ── SL determination ──────────────────────────────────────────────────────────
 
 def _determine_sl(
@@ -487,17 +504,25 @@ def _determine_sl(
         sl = best_wall.bin_low - offset if direction == "LONG" else best_wall.bin_high + offset
         return sl, "wall", best_wall
 
-    # Layer 2: POC
+    # Layer 2: POC (with minimum distance check — CRITICAL-4 fix)
     tf_5m = state.tf_states.get("5m")
     if tf_5m and tf_5m.klines:
         from bayesmarket.indicators.structure import compute_poc
         poc_val, _ = compute_poc(tf_5m.klines, state.mid_price)
         if poc_val > 0:
-            offset = entry_price * config.POC_SL_OFFSET_PCT / 100.0
-            if direction == "LONG" and poc_val < entry_price:
-                return poc_val - offset, "poc", None
-            elif direction == "SHORT" and poc_val > entry_price:
-                return poc_val + offset, "poc", None
+            poc_distance_pct = abs(poc_val - entry_price) / entry_price * 100
+            if poc_distance_pct >= config.POC_SL_MIN_DISTANCE_PCT:
+                offset = entry_price * config.POC_SL_OFFSET_PCT / 100.0
+                if direction == "LONG" and poc_val < entry_price:
+                    return poc_val - offset, "poc", None
+                elif direction == "SHORT" and poc_val > entry_price:
+                    return poc_val + offset, "poc", None
+            else:
+                logger.debug(
+                    "poc_sl_too_close",
+                    poc_dist_pct=round(poc_distance_pct, 3),
+                    min_pct=config.POC_SL_MIN_DISTANCE_PCT,
+                )
 
     # Layer 3: ATR
     atr = 0.0
@@ -554,6 +579,59 @@ def _determine_tp(
         tp2 = entry_price - config.TP2_ATR_MULTIPLIER * atr
 
     return tp1, tp2
+
+
+# ── Trailing stop (MOD-5) ─────────────────────────────────────────────────────
+
+def _update_trailing_stop(state: MarketState, pos: Position, mid: float) -> None:
+    """Trail SL behind high-water mark after TP1 hit."""
+    atr = 0.0
+    for tf_name in ["5m", "15m"]:
+        tf_s = state.tf_states.get(tf_name)
+        if tf_s and tf_s.klines:
+            atr = compute_atr(tf_s.klines)
+            if atr > 0:
+                break
+    if atr <= 0:
+        return
+
+    entry = pos.entry_price
+
+    if pos.side == "long":
+        # Update high-water mark
+        if mid > pos.trailing_high_water:
+            pos.trailing_high_water = mid
+
+        # Activate trailing once price moves activation_atr past entry
+        if not pos.trailing_active:
+            if pos.trailing_high_water >= entry + config.TRAILING_STOP_ACTIVATION_ATR * atr:
+                pos.trailing_active = True
+                logger.info("trailing_stop_activated", side="long", hwm=round(pos.trailing_high_water, 1))
+
+        if pos.trailing_active:
+            trail_sl = pos.trailing_high_water - config.TRAILING_STOP_DISTANCE_ATR * atr
+            # Trailing SL only tightens (moves up for long)
+            if trail_sl > pos.sl_price:
+                pos.sl_price = trail_sl
+                pos.sl_basis = "trailing"
+                logger.debug("trailing_sl_updated", new_sl=round(trail_sl, 1), hwm=round(pos.trailing_high_water, 1))
+    else:
+        # SHORT: track lowest price
+        if pos.trailing_high_water == 0 or mid < pos.trailing_high_water:
+            pos.trailing_high_water = mid
+
+        if not pos.trailing_active:
+            if pos.trailing_high_water <= entry - config.TRAILING_STOP_ACTIVATION_ATR * atr:
+                pos.trailing_active = True
+                logger.info("trailing_stop_activated", side="short", hwm=round(pos.trailing_high_water, 1))
+
+        if pos.trailing_active:
+            trail_sl = pos.trailing_high_water + config.TRAILING_STOP_DISTANCE_ATR * atr
+            # Trailing SL only tightens (moves down for short)
+            if trail_sl < pos.sl_price:
+                pos.sl_price = trail_sl
+                pos.sl_basis = "trailing"
+                logger.debug("trailing_sl_updated", new_sl=round(trail_sl, 1), hwm=round(pos.trailing_high_water, 1))
 
 
 # ── SL monitoring ─────────────────────────────────────────────────────────────

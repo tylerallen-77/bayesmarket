@@ -1,6 +1,13 @@
-"""SQLite interface — create tables, insert, query."""
+"""SQLite interface — create tables, insert, query.
+
+FIX CRITICAL-1: Added threading.Lock for all write operations.
+Even though asyncio is single-threaded, yield points between
+cursor.execute and conn.commit can interleave writes from
+different coroutines. Lock prevents data corruption.
+"""
 
 import sqlite3
+import threading
 import time
 from pathlib import Path
 from typing import Optional
@@ -96,6 +103,17 @@ CREATE TABLE IF NOT EXISTS events (
     event_type TEXT,
     details TEXT
 );
+
+CREATE TABLE IF NOT EXISTS indicator_correlations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp REAL NOT NULL,
+    timeframe TEXT NOT NULL,
+    sample_count INTEGER,
+    pair TEXT NOT NULL,
+    correlation REAL
+);
+
+CREATE INDEX IF NOT EXISTS idx_corr_tf_ts ON indicator_correlations(timeframe, timestamp);
 """
 
 
@@ -109,6 +127,7 @@ class Storage:
         self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA synchronous=NORMAL")
+        self._lock = threading.Lock()
         self._init_schema()
         self._migrate_v3()
         logger.info("storage_initialized", db_path=str(self.db_path))
@@ -144,7 +163,8 @@ class Storage:
     def insert_signal(self, signal: SignalSnapshot, mid_price: float) -> None:
         """Log a signal computation to the signals table."""
         try:
-            self.conn.execute(
+            with self._lock:
+                self.conn.execute(
                 """INSERT INTO signals (
                     timestamp, timeframe, mid_price,
                     cvd_score, obi_score, depth_score,
@@ -178,8 +198,8 @@ class Storage:
                     signal.signal,
                     signal.signal_blocked_reason,
                 ),
-            )
-            self.conn.commit()
+                )
+                self.conn.commit()
         except Exception as exc:
             logger.error("insert_signal_failed", error=str(exc), tf=signal.timeframe)
 
@@ -197,7 +217,8 @@ class Storage:
     ) -> int:
         """Log a completed trade. Returns row id."""
         try:
-            cursor = self.conn.execute(
+            with self._lock:
+                cursor = self.conn.execute(
                 """INSERT INTO trades (
                     entry_time, exit_time, side, source_tfs,
                     entry_price, exit_price, size,
@@ -241,9 +262,9 @@ class Storage:
                     (diagnosis.recommendation if diagnosis else None),
                     (int(diagnosis.score_flipped) if diagnosis else None),
                 ),
-            )
-            self.conn.commit()
-            return cursor.lastrowid
+                )
+                self.conn.commit()
+                return cursor.lastrowid
         except Exception as exc:
             logger.error("insert_trade_failed", error=str(exc))
             return 0
@@ -281,37 +302,57 @@ class Storage:
                 if t.timestamp >= now - 300
             )
 
-            self.conn.execute(
-                """INSERT INTO market_snapshots (
-                    timestamp, mid_price, best_bid, best_ask, spread,
-                    bid_depth_05pct, ask_depth_05pct,
-                    trade_count_1m, cvd_raw, funding_rate
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    now,
-                    mid,
-                    best_bid,
-                    best_ask,
-                    spread,
-                    bid_depth,
-                    ask_depth,
-                    trade_count,
-                    cvd_raw,
-                    state.funding_rate,
-                ),
-            )
-            self.conn.commit()
+            with self._lock:
+                self.conn.execute(
+                    """INSERT INTO market_snapshots (
+                        timestamp, mid_price, best_bid, best_ask, spread,
+                        bid_depth_05pct, ask_depth_05pct,
+                        trade_count_1m, cvd_raw, funding_rate
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        now,
+                        mid,
+                        best_bid,
+                        best_ask,
+                        spread,
+                        bid_depth,
+                        ask_depth,
+                        trade_count,
+                        cvd_raw,
+                        state.funding_rate,
+                    ),
+                )
+                self.conn.commit()
         except Exception as exc:
             logger.error("insert_snapshot_failed", error=str(exc))
+
+    def insert_correlations(
+        self, timestamp: float, timeframe: str, sample_count: int,
+        correlations: list[tuple[str, float]],
+    ) -> None:
+        """Log indicator correlation pairs for a timeframe."""
+        try:
+            with self._lock:
+                for pair, corr in correlations:
+                    self.conn.execute(
+                        """INSERT INTO indicator_correlations
+                        (timestamp, timeframe, sample_count, pair, correlation)
+                        VALUES (?, ?, ?, ?, ?)""",
+                        (timestamp, timeframe, sample_count, pair, corr),
+                    )
+                self.conn.commit()
+        except Exception as exc:
+            logger.error("insert_correlations_failed", error=str(exc), tf=timeframe)
 
     def insert_event(self, event_type: str, details: str) -> None:
         """Log a system event."""
         try:
-            self.conn.execute(
-                "INSERT INTO events (timestamp, event_type, details) VALUES (?, ?, ?)",
-                (time.time(), event_type, details),
-            )
-            self.conn.commit()
+            with self._lock:
+                self.conn.execute(
+                    "INSERT INTO events (timestamp, event_type, details) VALUES (?, ?, ?)",
+                    (time.time(), event_type, details),
+                )
+                self.conn.commit()
         except Exception as exc:
             logger.error("insert_event_failed", error=str(exc), event_type=event_type)
 

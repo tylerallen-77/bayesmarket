@@ -115,10 +115,9 @@ async def synthetic_trade_router(state: MarketState) -> None:
             now = time.time()
 
             if state.trades:
-                # Process trades newer than last processed timestamp
-                # Small overlap (0.05s) to avoid missing trades at boundary
-                cutoff = last_processed_ts - 0.05
-                new_trades = [t for t in state.trades if t.timestamp > cutoff]
+                # Process trades strictly newer than last processed timestamp
+                # FIX CRITICAL-6: removed 50ms overlap that caused duplicate processing
+                new_trades = [t for t in state.trades if t.timestamp > last_processed_ts]
 
                 for trade in new_trades:
                     feed_trade_to_builders(trade, builders, state)

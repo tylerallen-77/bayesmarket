@@ -49,10 +49,12 @@ async def hl_book_feed(state: MarketState) -> None:
 
         except (websockets.ConnectionClosed, ConnectionError, OSError) as exc:
             logger.warning("hl_book_feed_disconnected", error=str(exc), backoff=backoff)
+            asyncio.create_task(_ws_disconnect_alert("HL Book", str(exc)))
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 30)
         except Exception as exc:
             logger.error("hl_book_feed_error", error=str(exc), backoff=backoff)
+            asyncio.create_task(_ws_disconnect_alert("HL Book", str(exc)))
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 30)
 
@@ -201,10 +203,12 @@ async def hl_trade_feed(state: MarketState) -> None:
 
         except (websockets.ConnectionClosed, ConnectionError, OSError) as exc:
             logger.warning("hl_trade_feed_disconnected", error=str(exc), backoff=backoff)
+            asyncio.create_task(_ws_disconnect_alert("HL Trades", str(exc)))
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 30)
         except Exception as exc:
             logger.error("hl_trade_feed_error", error=str(exc), backoff=backoff)
+            asyncio.create_task(_ws_disconnect_alert("HL Trades", str(exc)))
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 30)
 
@@ -238,3 +242,13 @@ def _process_trades(msg: dict, state: MarketState) -> None:
     cutoff = now - config.TRADE_TTL_SECONDS
     while state.trades and state.trades[0].timestamp < cutoff:
         state.trades.popleft()
+
+
+async def _ws_disconnect_alert(feed_name: str, error: str) -> None:
+    """Send Telegram alert on WebSocket disconnect (MOD-3)."""
+    try:
+        from bayesmarket.telegram_bot.alerts import send_alert
+        msg = f"⚠️ *WS DISCONNECTED — {feed_name}*\n`{error[:100]}`\nReconnecting..."
+        await send_alert(msg)
+    except Exception:
+        pass

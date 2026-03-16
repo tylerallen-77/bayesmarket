@@ -127,10 +127,12 @@ async def binance_kline_feed(state: MarketState) -> None:
                 error=str(exc),
                 backoff=backoff,
             )
+            asyncio.create_task(_ws_disconnect_alert("Binance Kline", str(exc)))
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 30)
         except Exception as exc:
             logger.error("binance_kline_feed_error", error=str(exc), backoff=backoff)
+            asyncio.create_task(_ws_disconnect_alert("Binance Kline", str(exc)))
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 30)
 
@@ -197,3 +199,13 @@ def check_fallback_status(state: MarketState) -> None:
             tf_state.using_fallback = False
             state.kline_source = "synthetic"
             logger.info("fallback_recovered", tf=tf_name)
+
+
+async def _ws_disconnect_alert(feed_name: str, error: str) -> None:
+    """Send Telegram alert on WebSocket disconnect (MOD-3)."""
+    try:
+        from bayesmarket.telegram_bot.alerts import send_alert
+        msg = f"⚠️ *WS DISCONNECTED — {feed_name}*\n`{error[:100]}`\nReconnecting..."
+        await send_alert(msg)
+    except Exception:
+        pass

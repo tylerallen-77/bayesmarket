@@ -10,9 +10,13 @@ import structlog
 from bayesmarket import config
 from bayesmarket.data.state import MarketState
 from bayesmarket.data.storage import Storage
+from bayesmarket.indicators.correlation import CorrelationTracker
 from bayesmarket.indicators.scoring import compute_signal
 
 logger = structlog.get_logger()
+
+# Shared correlation tracker across all TF engines
+_correlation_tracker = CorrelationTracker()
 
 
 class TimeframeEngine:
@@ -34,6 +38,10 @@ class TimeframeEngine:
                 if self.state.mid_price > 0:
                     snap = compute_signal(self.state, self.tf_name)
                     self.storage.insert_signal(snap, self.state.mid_price)
+
+                    # CRITICAL-3: Track indicator correlations
+                    _correlation_tracker.record(snap)
+                    _correlation_tracker.maybe_log(self.tf_name, self.storage)
 
                     if snap.signal != "NEUTRAL":
                         logger.info(

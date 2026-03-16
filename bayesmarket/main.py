@@ -26,6 +26,7 @@ from bayesmarket.data.state import MarketState, TimeframeState
 from bayesmarket.data.storage import Storage
 from bayesmarket.dashboard.terminal import dashboard_loop
 from bayesmarket.engine.executor import merge_and_execute_loop, position_monitor_loop
+from bayesmarket.engine.reconcile import reconcile_positions
 from bayesmarket.engine.timeframe import TimeframeEngine
 from bayesmarket.feeds.binance import binance_kline_feed, bootstrap_klines, check_fallback_status
 from bayesmarket.feeds.hyperliquid import hl_book_feed, hl_trade_feed
@@ -104,6 +105,9 @@ async def main(startup_cfg: StartupConfig | None = None) -> None:
 
     logger.info("bootstrapping_klines")
     await bootstrap_klines(state)
+
+    # Reconcile positions (live/testnet only — check for orphaned exchange positions)
+    await reconcile_positions(state)
 
     engines = {
         tf_name: TimeframeEngine(tf_name, state, storage)

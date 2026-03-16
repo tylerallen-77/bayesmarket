@@ -103,7 +103,7 @@ TIMEFRAMES = {
 # ══════════════════════════════════════════════════════════════════
 CASCADE_BIAS_THRESHOLD = 3.0       # 4h score > +3 = LONG only, < -3 = SHORT only
 CASCADE_CONTEXT_SAME_SIGN = True   # 1h must match 4h direction sign
-CASCADE_TIMING_ZONE_TTL = 300      # 15m zone valid for 5 minutes (seconds)
+CASCADE_TIMING_ZONE_TTL = 600      # 15m zone valid for 10 minutes (was 5min, too short)
 
 # ══════════════════════════════════════════════════════════════════
 # CONNECTIONS
@@ -223,6 +223,7 @@ WALL_MIN_SIZE_MULTIPLIER = 2.0 # diturunkan dari 3.0 → lebih sensitif
 WALL_SL_OFFSET_PCT = 0.05
 
 POC_SL_OFFSET_PCT = 0.1
+POC_SL_MIN_DISTANCE_PCT = 0.3     # skip POC as SL if too close to entry
 ATR_SL_MULTIPLIER = 1.5
 EMERGENCY_SL_PCT = 3.0
 
@@ -231,6 +232,11 @@ SL_ONLY_TIGHTENS = True
 SL_TIGHTEN_MODE = "structural"
 SL_MIN_DISTANCE_ATR_MULT = 0.3
 SL_STRUCTURAL_CONFIRMATION_PCT = 0.003
+
+# Trailing stop after TP1 hit (MOD-5)
+TRAILING_STOP_ENABLED = True
+TRAILING_STOP_ACTIVATION_ATR = 0.5   # activate trail after price moves 0.5 ATR past entry
+TRAILING_STOP_DISTANCE_ATR = 0.75    # trail SL at 0.75 ATR behind highest/lowest price
 
 # SL/TP ratio guard — prevents absurd RR from stale POC/wall levels
 # If SL distance > MAX_SL_TP_RATIO * TP1 distance, cap SL to ratio limit
