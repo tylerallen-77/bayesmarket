@@ -1,0 +1,48 @@
+[Unit]
+Description=BayesMarket Trading Bot
+Documentation=https://github.com/youruser/bayesmarket
+After=network-online.target
+Wants=network-online.target
+# Restart jika koneksi internet sempat putus
+StartLimitIntervalSec=500
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/bayesmarket
+
+# Gunakan venv
+ExecStart=/opt/bayesmarket/venv/bin/python -m bayesmarket
+
+# Restart otomatis jika crash
+Restart=on-failure
+RestartSec=30s
+
+# Environment
+EnvironmentFile=/opt/bayesmarket/.env
+
+# Logging ke journald (lihat dengan: journalctl -u bayesmarket -f)
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=bayesmarket
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/bayesmarket
+
+# Resource limits
+# 1GB RAM limit — cukup untuk bot ini
+MemoryMax=1G
+# Jangan izinkan bot menghabiskan semua CPU
+CPUQuota=80%
+
+# Graceful shutdown
+TimeoutStopSec=30
+KillMode=mixed
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=multi-user.target

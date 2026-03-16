@@ -3,13 +3,15 @@
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from bayesmarket.runtime import RuntimeConfig
 
 
 @dataclass
 class TradeEvent:
     """A single trade from the Hyperliquid trade stream."""
-
     timestamp: float
     price: float
     size: float
@@ -20,7 +22,6 @@ class TradeEvent:
 @dataclass
 class Candle:
     """OHLCV candle — from synthetic builder or Binance fallback."""
-
     timestamp: float
     open: float
     high: float
@@ -33,7 +34,6 @@ class Candle:
 @dataclass
 class BookLevel:
     """Single price level in the order book."""
-
     price: float
     size: float
     num_orders: int = 0
@@ -41,8 +41,7 @@ class BookLevel:
 
 @dataclass
 class WallInfo:
-    """Detected order book wall using $10 price binning (errata Patch #2)."""
-
+    """Detected order book wall using price binning."""
     bin_center: float
     bin_low: float
     bin_high: float
@@ -55,24 +54,25 @@ class WallInfo:
 
     @property
     def age_seconds(self) -> float:
-        """How long this wall has been tracked."""
         return time.time() - self.first_seen
 
     @property
     def size_ratio(self) -> float:
-        """Current vs initial. Below 0.5 = wall decaying significantly."""
         return self.total_size / self.initial_size if self.initial_size > 0 else 0
 
     @property
     def is_valid(self) -> bool:
-        """Valid = survived 5s AND still >= 50% of initial size."""
-        return self.age_seconds >= 5.0 and self.size_ratio >= 0.5
+        """Valid = survived WALL_PERSISTENCE_SECONDS AND still >= 50% of initial size."""
+        from bayesmarket import config
+        return (
+            self.age_seconds >= config.WALL_PERSISTENCE_SECONDS
+            and self.size_ratio >= 0.5
+        )
 
 
 @dataclass
 class SignalSnapshot:
     """Computed per TF per cycle."""
-
     timestamp: float
     timeframe: str
 
@@ -128,7 +128,6 @@ class SignalSnapshot:
 @dataclass
 class Position:
     """Open position (max 1 at any time)."""
-
     side: str  # "long" or "short"
     entry_price: float
     size: float
@@ -155,11 +154,13 @@ class Position:
     last_swing_low: Optional[float] = None
     last_swing_high: Optional[float] = None
 
+    # Manual force-close flag (set via Telegram /close command)
+    _force_close: bool = False
+
 
 @dataclass
 class RiskState:
     """Risk management state machine."""
-
     daily_pnl: float = 0.0
     daily_pnl_reset_time: float = 0.0
     consecutive_losses: int = 0
@@ -176,7 +177,6 @@ class RiskState:
 @dataclass
 class TimeframeState:
     """Per-TF state. Each of 4 TFs has one instance."""
-
     name: str
     role: str  # "execution" or "filter"
     klines: deque = field(default_factory=lambda: deque(maxlen=200))
@@ -191,13 +191,13 @@ class TimeframeState:
 class MarketState:
     """Central state. All feeds write here, all engines read from here."""
 
-    # Shared: Order Book (from Hyperliquid)
+    # Shared: Order Book
     bids: list = field(default_factory=list)
     asks: list = field(default_factory=list)
     mid_price: float = 0.0
     book_update_time: float = 0.0
 
-    # Shared: Trades (from Hyperliquid)
+    # Shared: Trades
     trades: deque = field(default_factory=lambda: deque(maxlen=10000))
 
     # Shared: Wall tracking
@@ -212,7 +212,7 @@ class MarketState:
     # Risk
     risk: RiskState = field(default_factory=RiskState)
 
-    # Funding rate (fetched every 60s)
+    # Funding rate
     funding_rate: float = 0.0
     funding_tier: str = "safe"
 
@@ -220,3 +220,6 @@ class MarketState:
     capital: float = 1000.0
     start_time: float = field(default_factory=time.time)
     kline_source: str = "synthetic"
+
+    # Runtime config (attached in main.py, not default-constructed to avoid import cycle)
+    runtime: Optional["RuntimeConfig"] = field(default=None, repr=False)

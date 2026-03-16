@@ -1,0 +1,9 @@
+[build]
+builder = "nixpacks"
+
+[deploy]
+startCommand = "python -m bayesmarket"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10
+healthcheckPath = ""
+numReplicas = 1

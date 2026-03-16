@@ -1,6 +1,9 @@
-"""Hyperliquid WebSocket feeds: l2Book + trades (shared for all TFs).
+"""Hyperliquid WebSocket feeds: l2Book + trades.
 
-Includes wall tracker with $10 price binning (errata Patch #2).
+Fixes:
+  - Wall pruning window uses config.WALL_PRUNE_SECONDS (> WALL_PERSISTENCE_SECONDS)
+    Previously walls were pruned at 3s but required 5s to be "valid" — impossible.
+  - HL_L2_BOOK_LEVELS increased to 50 in config for better wall detection.
 """
 
 import asyncio
@@ -30,10 +33,11 @@ async def hl_book_feed(state: MarketState) -> None:
                         "type": "l2Book",
                         "coin": config.COIN,
                         "nSigFigs": config.HL_L2_SIG_FIGS,
+                        "mantissa": config.HL_L2_BOOK_LEVELS,
                     },
                 })
                 await ws.send(sub_msg)
-                logger.info("hl_book_feed_connected")
+                logger.info("hl_book_feed_connected", levels=config.HL_L2_BOOK_LEVELS)
                 backoff = 1
 
                 async for raw_msg in ws:
@@ -67,11 +71,19 @@ def _process_l2book(msg: dict, state: MarketState) -> None:
     raw_asks = levels[1]
 
     state.bids = [
-        BookLevel(price=float(lvl["px"]), size=float(lvl["sz"]), num_orders=int(lvl.get("n", 0)))
+        BookLevel(
+            price=float(lvl["px"]),
+            size=float(lvl["sz"]),
+            num_orders=int(lvl.get("n", 0)),
+        )
         for lvl in raw_bids
     ]
     state.asks = [
-        BookLevel(price=float(lvl["px"]), size=float(lvl["sz"]), num_orders=int(lvl.get("n", 0)))
+        BookLevel(
+            price=float(lvl["px"]),
+            size=float(lvl["sz"]),
+            num_orders=int(lvl.get("n", 0)),
+        )
         for lvl in raw_asks
     ]
 
@@ -79,25 +91,29 @@ def _process_l2book(msg: dict, state: MarketState) -> None:
         state.mid_price = (state.bids[0].price + state.asks[0].price) / 2.0
 
     state.book_update_time = time.time()
-
     _update_wall_tracker(state)
 
 
 def _update_wall_tracker(state: MarketState) -> None:
-    """Wall detection with $10 price binning (errata Patch #2)."""
+    """Wall detection with price binning.
+
+    Fixes:
+      - WALL_BIN_SIZE increased to 20 (better aggregation at BTC prices)
+      - WALL_MIN_SIZE_MULTIPLIER lowered to 2.0 (more sensitive)
+      - Pruning at WALL_PRUNE_SECONDS (> WALL_PERSISTENCE_SECONDS)
+    """
     now = time.time()
     bin_size = config.WALL_BIN_SIZE
 
     # Step 1: Aggregate levels into price bins
-    bins: dict[str, dict] = {}  # key = "bid_84000" or "ask_84000"
+    bins: dict[str, dict] = {}
 
     for lvl in state.bids:
         bin_low = math.floor(lvl.price / bin_size) * bin_size
-        bin_center = bin_low + bin_size / 2
-        key = f"bid_{bin_low}"
+        key = f"bid_{int(bin_low)}"
         if key not in bins:
             bins[key] = {
-                "bin_center": bin_center,
+                "bin_center": bin_low + bin_size / 2,
                 "bin_low": bin_low,
                 "bin_high": bin_low + bin_size,
                 "total_size": 0.0,
@@ -107,11 +123,10 @@ def _update_wall_tracker(state: MarketState) -> None:
 
     for lvl in state.asks:
         bin_low = math.floor(lvl.price / bin_size) * bin_size
-        bin_center = bin_low + bin_size / 2
-        key = f"ask_{bin_low}"
+        key = f"ask_{int(bin_low)}"
         if key not in bins:
             bins[key] = {
-                "bin_center": bin_center,
+                "bin_center": bin_low + bin_size / 2,
                 "bin_low": bin_low,
                 "bin_high": bin_low + bin_size,
                 "total_size": 0.0,
@@ -120,24 +135,24 @@ def _update_wall_tracker(state: MarketState) -> None:
         bins[key]["total_size"] += lvl.size
 
     # Step 2: Compute threshold
-    non_zero_totals = [b["total_size"] for b in bins.values() if b["total_size"] > 0]
-    if not non_zero_totals:
+    non_zero = [b["total_size"] for b in bins.values() if b["total_size"] > 0]
+    if not non_zero:
         return
-    avg_bin_size = sum(non_zero_totals) / len(non_zero_totals)
+    avg_bin_size = sum(non_zero) / len(non_zero)
     threshold = avg_bin_size * config.WALL_MIN_SIZE_MULTIPLIER
 
     # Step 3: Update tracked walls
-    existing_walls: dict[str, WallInfo] = {}
+    existing: dict[str, WallInfo] = {}
     for wall in state.tracked_walls:
         key = f"{wall.side}_{int(wall.bin_low)}"
-        existing_walls[key] = wall
+        existing[key] = wall
 
     new_tracked: list[WallInfo] = []
 
     for key, bin_data in bins.items():
         if bin_data["total_size"] >= threshold:
-            if key in existing_walls:
-                wall = existing_walls[key]
+            if key in existing:
+                wall = existing[key]
                 wall.last_seen = now
                 wall.total_size = bin_data["total_size"]
                 wall.peak_size = max(wall.peak_size, bin_data["total_size"])
@@ -155,8 +170,12 @@ def _update_wall_tracker(state: MarketState) -> None:
                     peak_size=bin_data["total_size"],
                 ))
 
-    # Step 4: Prune walls not updated in last 3 seconds
-    state.tracked_walls = [w for w in new_tracked if now - w.last_seen < 3.0]
+    # Step 4: Prune walls not seen recently
+    # FIX: use WALL_PRUNE_SECONDS (must be > WALL_PERSISTENCE_SECONDS)
+    # Old code used 3.0 hardcoded while WALL_PERSISTENCE_SECONDS was 5.0 → walls
+    # were always pruned before they could become "valid".
+    prune_window = getattr(config, "WALL_PRUNE_SECONDS", config.WALL_PERSISTENCE_SECONDS + 2.0)
+    state.tracked_walls = [w for w in new_tracked if now - w.last_seen < prune_window]
 
 
 async def hl_trade_feed(state: MarketState) -> None:
@@ -212,7 +231,6 @@ def _process_trades(msg: dict, state: MarketState) -> None:
         )
         state.trades.append(trade)
 
-        # Update last HL trade time for fallback detection
         for tf_state in state.tf_states.values():
             tf_state.last_hl_trade_time = now
 

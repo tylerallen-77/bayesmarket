@@ -1,28 +1,43 @@
-"""BayesMarket MVP Configuration — All parameters locked."""
+"""BayesMarket Configuration.
+
+CARA SWITCH MODE:
+  1. Via Telegram: /live atau /shadow command
+  2. Via .env:  LIVE_MODE=True dan restart bot
+  3. Via config: ubah LIVE_MODE di bawah dan restart
+
+Semua parameter yang bisa diubah saat runtime ada di RuntimeConfig (runtime.py).
+Config ini adalah default / static values.
+"""
 
 import os
 from pathlib import Path
-
 from dotenv import load_dotenv
 
 load_dotenv()
 
 # ══════════════════════════════════════════════════════════════════
-# CAPITAL & MODE
+# MODE — Bisa diubah via Telegram tanpa restart
 # ══════════════════════════════════════════════════════════════════
-LIVE_MODE = False  # False = shadow mode (no orders, no credentials needed)
+LIVE_MODE = os.getenv("LIVE_MODE", "false").lower() == "true"
+# False = shadow mode (default, aman, tidak ada order nyata)
+# True  = live mode (order nyata di Hyperliquid)
 
-# Capital source depends on mode:
-# - Shadow mode: uses SIMULATED_CAPITAL below (no API call)
-# - Live mode: auto-fetches actual USDC balance from Hyperliquid account
-#   Falls back to SIMULATED_CAPITAL if fetch fails (with warning log)
-SIMULATED_CAPITAL = 1000.0
+SIMULATED_CAPITAL = float(os.getenv("SIMULATED_CAPITAL", "1000.0"))
+
+# ══════════════════════════════════════════════════════════════════
+# TELEGRAM
+# ══════════════════════════════════════════════════════════════════
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+# Cara dapatkan:
+#   Token: @BotFather → /newbot
+#   Chat ID: @userinfobot atau kirim pesan ke bot lalu cek /getUpdates
 
 # ══════════════════════════════════════════════════════════════════
 # ASSET
 # ══════════════════════════════════════════════════════════════════
-COIN = "BTC"
-BINANCE_SYMBOL = "BTCUSDT"  # Used for FUTURES, not spot
+COIN = os.getenv("COIN", "BTC")
+BINANCE_SYMBOL = os.getenv("BINANCE_SYMBOL", "BTCUSDT")
 
 # ══════════════════════════════════════════════════════════════════
 # MULTI-TIMEFRAME ARCHITECTURE
@@ -85,86 +100,78 @@ TIMEFRAMES = {
 # ══════════════════════════════════════════════════════════════════
 # CONNECTIONS
 # ══════════════════════════════════════════════════════════════════
-HL_WS_URL = "wss://api.hyperliquid.xyz/ws"
-HL_REST_URL = "https://api.hyperliquid.xyz"
-HL_L2_BOOK_LEVELS = 20
-HL_L2_SIG_FIGS = 5
+HL_REST_URL = os.getenv("HL_REST_URL", "https://api.hyperliquid.xyz")
+HL_WS_URL   = os.getenv("HL_WS_URL",   "wss://api.hyperliquid.xyz/ws")
+IS_TESTNET  = "testnet" in HL_REST_URL
 
-# Binance FUTURES (fallback only — not primary)
+DEPLOYMENT_ENV = os.getenv("DEPLOYMENT_ENV", "local")
+# Values: "railway" | "vps" | "local"
+# Used to toggle features incompatible with Railway (e.g. terminal dashboard)
+
+IS_RAILWAY = DEPLOYMENT_ENV == "railway"
+HL_L2_BOOK_LEVELS = 50          # ditingkatkan dari 20 untuk wall detection
+HL_L2_SIG_FIGS = 4              # 4 sig figs → $10 resolution natural di BTC
+
 BINANCE_FUTURES_WS_URL = "wss://fstream.binance.com/stream"
 BINANCE_FUTURES_REST_URL = "https://fapi.binance.com/fapi/v1"
 
-# HL credentials (optional — only for LIVE_MODE)
 HL_PRIVATE_KEY = os.getenv("HL_PRIVATE_KEY", "")
 HL_ACCOUNT_ADDRESS = os.getenv("HL_ACCOUNT_ADDRESS", "")
 
 # ══════════════════════════════════════════════════════════════════
 # KLINE SOURCE
 # ══════════════════════════════════════════════════════════════════
-KLINE_SOURCE = "synthetic"  # "synthetic" = build from HL trades (primary)
+KLINE_SOURCE = "synthetic"
 KLINE_FALLBACK_ENABLED = True
-KLINE_FALLBACK_STALE_SECONDS = 10  # If no HL trade for 10s, switch to fallback
+KLINE_FALLBACK_STALE_SECONDS = 10
 
 # ══════════════════════════════════════════════════════════════════
 # DATA RETENTION
 # ══════════════════════════════════════════════════════════════════
-TRADE_TTL_SECONDS = 600  # Keep 10 min of HL trades in memory
+TRADE_TTL_SECONDS = 600
 OB_SNAPSHOT_INTERVAL = 0.5
 
 # ══════════════════════════════════════════════════════════════════
-# SCORING WEIGHTS (same for all TFs)
+# SCORING WEIGHTS — dokumentasi; baked ke indicator functions
 # ══════════════════════════════════════════════════════════════════
 WEIGHTS = {
-    # Category A: Order Flow (leading) — max ±6.0 total
-    "cvd": 2.0,
-    "obi": 2.0,
-    "depth": 2.0,
-    # Category B: Structure & Equilibrium — max ±4.5 total
-    "vwap": 1.5,
-    "poc": 1.5,
-    "ha": 1.5,
-    # Category C: Momentum (lagging) — max ±3.0 total
-    "rsi": 1.0,
-    "macd": 1.0,
-    "ema": 1.0,
+    "cvd": 2.0,    # compute_cvd returns [-2, +2]
+    "obi": 2.0,    # compute_obi returns [-2, +2]
+    "depth": 2.0,  # compute_depth returns [-2, +2]
+    "vwap": 1.5,   # compute_vwap clamped to ±1.5
+    "poc": 1.5,    # compute_poc clamped to ±1.5
+    "ha": 1.5,     # compute_ha clamped to ±1.5
+    "rsi": 1.0,    # compute_rsi returns [-1, +1]
+    "macd": 1.0,   # compute_macd clamped to ±1.0
+    "ema": 1.0,    # compute_ema clamped to ±1.0
 }
-# Theoretical max: ±13.5
+# Max total: ±13.5
 
 # ══════════════════════════════════════════════════════════════════
 # INDICATOR PARAMETERS
 # ══════════════════════════════════════════════════════════════════
-
-# CVD
 CVD_WINDOW_SECONDS = 300
 CVD_MAPPING = "tanh"
 
-# OBI — obi_band_pct is per-TF (see TIMEFRAMES dict)
-
-# Liquidity Depth
 DEPTH_BAND_PCT = 0.5
 
-# VWAP
-VWAP_SENSITIVITY = 150.0
+# VWAP — diturunkan dari 150 ke 20 untuk mengurangi saturation
+VWAP_SENSITIVITY = 20.0
 
-# POC
+# POC — sama
+POC_SENSITIVITY = 20.0
 VP_BINS = 30
-POC_SENSITIVITY = 150.0
 
-# Heikin Ashi
-HA_MAX_STREAK = 3
-HA_DISPLAY_COUNT = 8
+HA_MAX_STREAK = 5              # dinaikkan dari 3 → butuh lebih banyak konfirmasi
 
-# RSI
 RSI_PERIOD = 14
 RSI_OB = 70
 RSI_OS = 30
 
-# MACD
 MACD_FAST = 12
 MACD_SLOW = 26
 MACD_SIGNAL = 9
 
-# EMA
 EMA_SHORT = 5
 EMA_LONG = 20
 EMA_SENSITIVITY = 200.0
@@ -184,18 +191,14 @@ MERGE_MAX_SIZE_MULTIPLIER = 2.0
 # ══════════════════════════════════════════════════════════════════
 # RISK MANAGEMENT
 # ══════════════════════════════════════════════════════════════════
-
-# Position sizing
 MAX_RISK_PER_TRADE = 0.02
 MAX_LEVERAGE = 5.0
 MIN_ORDER_VALUE_USD = 10.0
 
-# Daily limits
 DAILY_LOSS_LIMIT = 0.07
 DAILY_PAUSE_HOURS = 12
 DAILY_RESET_HOUR_UTC = 0
 
-# Cooldown
 COOLDOWN_TRIGGER_LOSSES = 3
 COOLDOWN_SIZE_MULTIPLIER = 0.5
 COOLDOWN_RESET_WINS = 2
@@ -204,33 +207,30 @@ FULL_STOP_TRIGGER_LOSSES = 3
 FULL_STOP_DURATION_SECONDS = 14400
 
 # ══════════════════════════════════════════════════════════════════
-# STOP LOSS — 3-LAYER FALLBACK
+# STOP LOSS
 # ══════════════════════════════════════════════════════════════════
-
-# Layer 1: Wall-based (with price binning)
-WALL_BIN_SIZE = 10.0  # Group levels into $10 bins
-WALL_PERSISTENCE_SECONDS = 5.0  # Reduced from 15s (with binning this is sufficient)
-WALL_MIN_SIZE_MULTIPLIER = 3.0
+WALL_BIN_SIZE = 20.0           # ditingkatkan dari 10 → aggregasi lebih baik
+WALL_PERSISTENCE_SECONDS = 3.0 # diturunkan dari 5 → lebih responsif
+WALL_PRUNE_SECONDS = 6.0       # baru: prune setelah 6s (> persistence)
+WALL_MIN_SIZE_MULTIPLIER = 2.0 # diturunkan dari 3.0 → lebih sensitif
 WALL_SL_OFFSET_PCT = 0.05
 
-# Layer 2: POC-based
 POC_SL_OFFSET_PCT = 0.1
-
-# Layer 3: ATR-based
 ATR_SL_MULTIPLIER = 1.5
-
-# Emergency
 EMERGENCY_SL_PCT = 3.0
 
-# SL monitoring after entry
 SL_WALL_SIZE_DECAY_THRESHOLD = 0.5
 SL_ONLY_TIGHTENS = True
 SL_TIGHTEN_MODE = "structural"
 SL_MIN_DISTANCE_ATR_MULT = 0.3
 SL_STRUCTURAL_CONFIRMATION_PCT = 0.003
 
+# SL/TP ratio guard — prevents absurd RR from stale POC/wall levels
+# If SL distance > MAX_SL_TP_RATIO * TP1 distance, cap SL to ratio limit
+MAX_SL_TP_RATIO = 3.0
+
 # ══════════════════════════════════════════════════════════════════
-# TAKE PROFIT — DUAL TP
+# TAKE PROFIT
 # ══════════════════════════════════════════════════════════════════
 TP1_SIZE_PCT = 0.60
 TP1_TARGET = "vwap"
@@ -240,8 +240,13 @@ TP1_NEAR_VWAP_THRESHOLD = 0.001
 TP2_SIZE_PCT = 0.40
 TP2_ATR_MULTIPLIER = 2.0
 
+# Time-based exit: tutup posisi jika tidak hit TP1 dalam X menit
+TIME_EXIT_ENABLED = True
+TIME_EXIT_MINUTES_5M = 30   # 5m TF: max 30 menit
+TIME_EXIT_MINUTES_15M = 90  # 15m TF: max 90 menit
+
 # ══════════════════════════════════════════════════════════════════
-# FUNDING RATE FILTER — 3 TIER
+# FUNDING RATE
 # ══════════════════════════════════════════════════════════════════
 FUNDING_TIER_SAFE = 0.0001
 FUNDING_TIER_CAUTION = 0.0005
@@ -249,7 +254,7 @@ FUNDING_CAUTION_SIZE_MULT = 0.75
 FUNDING_POLL_INTERVAL = 60
 
 # ══════════════════════════════════════════════════════════════════
-# ORDER TYPES (for LIVE_MODE)
+# ORDER TYPES (LIVE MODE)
 # ══════════════════════════════════════════════════════════════════
 ENTRY_ORDER_TYPE = "limit_post_only"
 ENTRY_ORDER_TIMEOUT_SECONDS = 5
@@ -268,4 +273,4 @@ DASHBOARD_REFRESH_SECONDS = 3.0
 # ══════════════════════════════════════════════════════════════════
 # DATABASE
 # ══════════════════════════════════════════════════════════════════
-DB_PATH = Path("bayesmarket.db")
+DB_PATH = Path(os.getenv("DB_PATH", "bayesmarket.db"))

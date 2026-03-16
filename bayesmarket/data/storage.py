@@ -64,7 +64,16 @@ CREATE TABLE IF NOT EXISTS trades (
     merge_type TEXT,
     funding_cost REAL,
     cooldown_active INTEGER,
-    regime TEXT
+    regime TEXT,
+    -- Loss analysis columns (added v3)
+    score_at_exit REAL,
+    rr_actual REAL,
+    hold_minutes REAL,
+    loss_category TEXT,
+    loss_severity TEXT,
+    loss_diagnosis TEXT,
+    loss_recommendation TEXT,
+    score_flipped INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS market_snapshots (
@@ -95,15 +104,41 @@ class Storage:
 
     def __init__(self, db_path: Optional[Path] = None) -> None:
         self.db_path = db_path or config.DB_PATH
+        # Ensure parent directory exists (needed for Railway volume mount)
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA synchronous=NORMAL")
         self._init_schema()
+        self._migrate_v3()
         logger.info("storage_initialized", db_path=str(self.db_path))
 
     def _init_schema(self) -> None:
         """Create all tables if they don't exist."""
         self.conn.executescript(_SCHEMA)
+        self.conn.commit()
+
+    def _migrate_v3(self) -> None:
+        """Add v3 loss analysis columns if not present."""
+        existing = {
+            row[1] for row in
+            self.conn.execute("PRAGMA table_info(trades)")
+        }
+        new_cols = {
+            "score_at_exit": "REAL",
+            "rr_actual": "REAL",
+            "hold_minutes": "REAL",
+            "loss_category": "TEXT",
+            "loss_severity": "TEXT",
+            "loss_diagnosis": "TEXT",
+            "loss_recommendation": "TEXT",
+            "score_flipped": "INTEGER",
+        }
+        for col, dtype in new_cols.items():
+            if col not in existing:
+                self.conn.execute(
+                    f"ALTER TABLE trades ADD COLUMN {col} {dtype}"
+                )
         self.conn.commit()
 
     def insert_signal(self, signal: SignalSnapshot, mid_price: float) -> None:
@@ -158,18 +193,22 @@ class Storage:
         merge_type: str,
         regime: str,
         funding_cost: float = 0.0,
-    ) -> None:
-        """Log a completed trade."""
+        diagnosis=None,
+    ) -> int:
+        """Log a completed trade. Returns row id."""
         try:
-            self.conn.execute(
+            cursor = self.conn.execute(
                 """INSERT INTO trades (
                     entry_time, exit_time, side, source_tfs,
                     entry_price, exit_price, size,
                     sl_price, sl_basis, tp1_price, tp2_price,
                     tp1_hit, tp2_hit, exit_reason,
                     pnl, pnl_pct, entry_score_5m, entry_score_15m,
-                    merge_type, funding_cost, cooldown_active, regime
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    merge_type, funding_cost, cooldown_active, regime,
+                    score_at_exit, rr_actual, hold_minutes,
+                    loss_category, loss_severity, loss_diagnosis,
+                    loss_recommendation, score_flipped
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     position.entry_time,
                     time.time(),
@@ -193,11 +232,21 @@ class Storage:
                     funding_cost,
                     0,  # cooldown_active tracked separately
                     regime,
+                    (diagnosis.score_at_exit if diagnosis else None),
+                    (diagnosis.rr_ratio if diagnosis else None),
+                    (diagnosis.hold_minutes if diagnosis else None),
+                    (diagnosis.category if diagnosis else None),
+                    (diagnosis.severity if diagnosis else None),
+                    (diagnosis.diagnosis_text if diagnosis else None),
+                    (diagnosis.recommendation if diagnosis else None),
+                    (int(diagnosis.score_flipped) if diagnosis else None),
                 ),
             )
             self.conn.commit()
+            return cursor.lastrowid
         except Exception as exc:
             logger.error("insert_trade_failed", error=str(exc))
+            return 0
 
     def insert_snapshot(self, state: MarketState) -> None:
         """Log a market snapshot every 10s."""

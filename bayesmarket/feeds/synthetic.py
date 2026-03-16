@@ -1,7 +1,9 @@
-"""Synthetic kline builder from Hyperliquid trade stream (errata Patch #1).
+"""Synthetic kline builder from Hyperliquid trade stream.
 
-One SyntheticKlineBuilder instance per timeframe interval.
-Each receives the same trade stream and aggregates into candles.
+Fix: _synthetic_trade_router race condition.
+  Old approach: track by list index (last_processed counter).
+  Problem: TTL pruning via popleft() shifts indices → missed trades.
+  Fix: track by last processed trade timestamp, not index.
 """
 
 import math
@@ -27,16 +29,11 @@ class SyntheticKlineBuilder:
         self.completed_candles: deque[Candle] = deque(maxlen=max_candles)
 
     def on_trade(self, trade: TradeEvent) -> Optional[Candle]:
-        """Process a trade and return a completed candle if one just closed.
-
-        Returns the closed candle or None.
-        """
+        """Process a trade, return closed candle if one just completed."""
         bucket_start = math.floor(trade.timestamp / self.interval) * self.interval
-
         closed_candle: Optional[Candle] = None
 
         if self.current_candle is None or bucket_start != self.candle_start_time:
-            # New candle period
             if self.current_candle is not None:
                 self.current_candle.closed = True
                 closed_candle = self.current_candle
@@ -53,7 +50,6 @@ class SyntheticKlineBuilder:
                 closed=False,
             )
         else:
-            # Update current candle
             self.current_candle.high = max(self.current_candle.high, trade.price)
             self.current_candle.low = min(self.current_candle.low, trade.price)
             self.current_candle.close = trade.price
@@ -62,19 +58,17 @@ class SyntheticKlineBuilder:
         return closed_candle
 
 
-# Mapping from TF name to kline interval in seconds
 TF_TO_INTERVAL = {
-    "5m": 60,      # 1m candles for 5m TF
-    "15m": 300,    # 5m candles for 15m TF
-    "1h": 900,     # 15m candles for 1h TF
-    "4h": 3600,    # 1h candles for 4h TF
+    "5m": 60,
+    "15m": 300,
+    "1h": 900,
+    "4h": 3600,
 }
 
 
 def create_builders(state: MarketState) -> dict[str, SyntheticKlineBuilder]:
-    """Create one SyntheticKlineBuilder per timeframe."""
     builders = {}
-    for tf_name, tf_cfg in state.tf_states.items():
+    for tf_name in state.tf_states:
         interval = TF_TO_INTERVAL.get(tf_name)
         if interval:
             max_candles = 200 if tf_name in ("5m", "15m") else 150
@@ -88,7 +82,6 @@ def feed_trade_to_builders(
     builders: dict[str, SyntheticKlineBuilder],
     state: MarketState,
 ) -> None:
-    """Feed a single trade to all synthetic builders and update TF klines."""
     for tf_name, builder in builders.items():
         closed = builder.on_trade(trade)
         if closed is not None:
@@ -98,7 +91,44 @@ def feed_trade_to_builders(
                 logger.debug(
                     "synthetic_kline_closed",
                     tf=tf_name,
-                    ts=closed.timestamp,
                     close=closed.close,
                     volume=closed.volume,
                 )
+
+
+# ── Trade router — standalone function called from main.py ────────────────────
+
+async def synthetic_trade_router(state: MarketState) -> None:
+    """Route HL trades to synthetic builders.
+
+    FIX: Track by timestamp instead of index to avoid race with TTL pruning.
+    Uses a small lookback window (1s) to catch new trades each cycle.
+    """
+    import asyncio
+    from bayesmarket.feeds.binance import check_fallback_status
+
+    builders = create_builders(state)
+    last_processed_ts: float = 0.0
+
+    while True:
+        try:
+            now = time.time()
+
+            if state.trades:
+                # Process trades newer than last processed timestamp
+                # Small overlap (0.05s) to avoid missing trades at boundary
+                cutoff = last_processed_ts - 0.05
+                new_trades = [t for t in state.trades if t.timestamp > cutoff]
+
+                for trade in new_trades:
+                    feed_trade_to_builders(trade, builders, state)
+
+                if new_trades:
+                    last_processed_ts = max(t.timestamp for t in new_trades)
+
+            check_fallback_status(state)
+
+        except Exception as exc:
+            logger.error("synthetic_router_error", error=str(exc))
+
+        await asyncio.sleep(0.1)

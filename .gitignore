@@ -31,3 +31,10 @@ desktop.ini
 
 # Logs
 *.log
+
+# Claude Code
+.claude/
+
+# Reference/source files (not part of build)
+bayesmarket_v2_full/
+bayesmarket_v3_full/
