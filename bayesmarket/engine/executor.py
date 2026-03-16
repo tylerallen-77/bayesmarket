@@ -93,7 +93,6 @@ def _evaluate_entry(state: MarketState, storage: Storage) -> None:
         sl_price=sl_price,
         cooldown_active=state.risk.cooldown_active,
         funding_tier=state.funding_tier,
-        is_merged=decision.action == "merged",
     )
     if size is None:
         return
@@ -225,19 +224,18 @@ def _monitor_position(state: MarketState, storage: Storage) -> None:
 
     # ── Force close (from Telegram /close command) ────────────────
     if pos._force_close:
-        pnl = calculate_pnl(pos.side, pos.entry_price, mid, pos.remaining_size)
-        # Add already-realized TP1 pnl if applicable
-        total_pnl = pos.pnl_realized + pnl
+        remaining_pnl = calculate_pnl(pos.side, pos.entry_price, mid, pos.remaining_size)
+        total_pnl = pos.pnl_realized + remaining_pnl
         pnl_pct = total_pnl / state.capital * 100 if state.capital > 0 else 0
         logger.info(f"[{mode}] force_close", side=pos.side, pnl=round(total_pnl, 2))
-        _close_position(state, storage, mid, "force_close", total_pnl, pnl_pct)
+        # Pass remaining_pnl only — TP1 already banked to capital
+        _close_position(state, storage, mid, "force_close", remaining_pnl, pnl_pct)
         return
 
     # ── SL check ──────────────────────────────────────────────────
     if check_sl(pos, mid):
-        # PnL on remaining size only — pnl_realized already banked
-        sl_pnl = calculate_pnl(pos.side, pos.entry_price, mid, pos.remaining_size)
-        total_pnl = pos.pnl_realized + sl_pnl
+        remaining_pnl = calculate_pnl(pos.side, pos.entry_price, mid, pos.remaining_size)
+        total_pnl = pos.pnl_realized + remaining_pnl
         pnl_pct = total_pnl / state.capital * 100 if state.capital > 0 else 0
 
         logger.info(
@@ -248,7 +246,8 @@ def _monitor_position(state: MarketState, storage: Storage) -> None:
             pnl=round(total_pnl, 2),
             sl_basis=pos.sl_basis,
         )
-        diag = _close_position(state, storage, mid, "sl_hit", total_pnl, pnl_pct)
+        # Pass remaining_pnl only — TP1 already banked to capital
+        diag = _close_position(state, storage, mid, "sl_hit", remaining_pnl, pnl_pct)
 
         if rt and rt.alert_on_sl_hit:
             asyncio.create_task(_send_exit_alert(pos, mid, total_pnl, pnl_pct, "sl_hit", mode, diagnosis=diag))
@@ -298,8 +297,8 @@ def _monitor_position(state: MarketState, storage: Storage) -> None:
         elapsed_min = (time.time() - pos.entry_time) / 60
         limit_min = config.TIME_EXIT_MINUTES_5M
         if elapsed_min >= limit_min:
-            pnl = calculate_pnl(pos.side, pos.entry_price, mid, pos.remaining_size)
-            total_pnl = pos.pnl_realized + pnl
+            remaining_pnl = calculate_pnl(pos.side, pos.entry_price, mid, pos.remaining_size)
+            total_pnl = pos.pnl_realized + remaining_pnl
             pnl_pct = total_pnl / state.capital * 100 if state.capital > 0 else 0
 
             logger.info(
@@ -308,7 +307,8 @@ def _monitor_position(state: MarketState, storage: Storage) -> None:
                 limit_min=limit_min,
                 pnl=round(total_pnl, 2),
             )
-            diag = _close_position(state, storage, mid, "time_exit", total_pnl, pnl_pct)
+            # Pass remaining_pnl only — TP1 already banked to capital
+            diag = _close_position(state, storage, mid, "time_exit", remaining_pnl, pnl_pct)
 
             if rt and rt.alert_on_exit:
                 asyncio.create_task(_send_exit_alert(pos, mid, total_pnl, pnl_pct, "time_exit", mode, diagnosis=diag))

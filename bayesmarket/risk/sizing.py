@@ -15,7 +15,6 @@ def calculate_position_size(
     sl_price: float,
     cooldown_active: bool = False,
     funding_tier: str = "safe",
-    is_merged: bool = False,
 ) -> Optional[float]:
     """Calculate position size respecting 2% risk rule and leverage cap.
 
@@ -41,9 +40,6 @@ def calculate_position_size(
     if funding_tier == "caution":
         risk_based_size *= config.FUNDING_CAUTION_SIZE_MULT
 
-    if is_merged:
-        risk_based_size *= config.MERGE_MAX_SIZE_MULTIPLIER
-
     # Step 3: Cap by leverage limit
     max_notional = capital * config.MAX_LEVERAGE
     max_size_by_leverage = max_notional / entry_price
@@ -66,7 +62,6 @@ def calculate_position_size(
         risk_based=round(risk_based_size, 6),
         capped=risk_based_size > max_size_by_leverage,
         cooldown=cooldown_active,
-        merged=is_merged,
     )
 
     return final_size

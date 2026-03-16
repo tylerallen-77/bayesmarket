@@ -118,6 +118,27 @@ python -m bayesmarket
 > pip install --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org -r bayesmarket/requirements.txt
 > ```
 
+### Startup Wizard
+
+On first launch (or when no `.env` exists), an interactive wizard guides you through configuration:
+
+```
+┌──────────────────────────────────────────────────┐
+│   BAYESMARKET — Startup Wizard                   │
+├──────────────────────────────────────────────────┤
+│  STEP 1  Operating Mode (shadow/testnet/live)    │
+│  STEP 2  Credentials (testnet/live only)         │
+│  STEP 3  Telegram Bot (optional)                 │
+│  STEP 4  Parameters (thresholds, risk, leverage) │
+│  STEP 5  Database path                           │
+│  REVIEW  Confirm & optionally save to .env       │
+└──────────────────────────────────────────────────┘
+```
+
+- **Terminal** (local/VPS): interactive prompts via stdin
+- **Railway**: use Telegram `/setup` command instead (no TTY)
+- If `.env` exists, you can skip the wizard and launch with defaults
+
 ### What Happens on Launch
 
 1. Bootstraps kline history from Binance Futures REST (4 calls)
@@ -149,6 +170,7 @@ BayesMarket includes a full Telegram control panel for remote monitoring and con
 | Command | Description |
 |---------|-------------|
 | `/start` | Main menu with inline buttons |
+| `/setup` | Interactive setup wizard (mode, parameters, credentials) |
 | `/status` | Full status (position, PnL, risk state) |
 | `/scores` | Live scores for all 4 timeframes |
 | `/report [1d\|7d\|30d\|all]` | Performance report |

@@ -491,6 +491,54 @@ def build_handlers(state: "MarketState", rt: "RuntimeConfig") -> list:
         except Exception as exc:
             await update.message.reply_text(f"❌ Error: {exc}")
 
+    async def cmd_setup(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+        """Interactive setup wizard via Telegram (for Railway deployment)."""
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+        mode_c = {"shadow": "🟡", "testnet": "🟠", "live": "🔴"}
+        current_mode = "live" if rt.live_mode else "shadow"
+        if rt.live_mode and config.IS_TESTNET:
+            current_mode = "testnet"
+
+        msg = (
+            "⚙️ *BAYESMARKET SETUP WIZARD*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            f"Current mode: {mode_c.get(current_mode, '⚪')} `{current_mode.upper()}`\n\n"
+            "*Current Configuration:*\n"
+            f"  Capital: `${state.capital:,.2f}`\n"
+            f"  Trigger threshold (5m): `{rt.scoring_threshold_5m}`\n"
+            f"  Bias threshold (4h): `{rt.bias_threshold}`\n"
+            f"  VWAP sensitivity: `{rt.vwap_sensitivity}`\n"
+            f"  POC sensitivity: `{rt.poc_sensitivity}`\n"
+            f"  Max leverage: `{config.MAX_LEVERAGE}x`\n"
+            f"  Risk/trade: `{config.MAX_RISK_PER_TRADE*100:.1f}%`\n"
+            f"  Daily loss limit: `{config.DAILY_LOSS_LIMIT*100:.1f}%`\n"
+            f"  Database: `{config.DB_PATH}`\n"
+            f"  Telegram: `{'✅ Connected' if config.TELEGRAM_BOT_TOKEN else '❌ Not set'}`\n"
+            f"  HL Wallet: `{'✅ Set' if config.HL_PRIVATE_KEY else '❌ Not set'}`\n\n"
+            "Use the buttons below to adjust, or use `/set` for individual parameters.\n"
+            "Changes via `/set` take effect immediately (no restart needed)."
+        )
+        kb = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🟡 Shadow", callback_data="setup_shadow"),
+                InlineKeyboardButton("🟠 Testnet", callback_data="setup_testnet"),
+                InlineKeyboardButton("🔴 Live", callback_data="setup_live"),
+            ],
+            [
+                InlineKeyboardButton("📊 Threshold ▲", callback_data="threshold_up"),
+                InlineKeyboardButton("📊 Threshold ▼", callback_data="threshold_down"),
+            ],
+            [
+                InlineKeyboardButton("📊 Bias ▲", callback_data="setup_bias_up"),
+                InlineKeyboardButton("📊 Bias ▼", callback_data="setup_bias_down"),
+            ],
+            [
+                InlineKeyboardButton("◀️ Main Menu", callback_data="main_menu"),
+            ],
+        ])
+        await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=kb)
+
     async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         msg = (
             "📖 *BAYESMARKET COMMANDS*\n"
@@ -499,6 +547,7 @@ def build_handlers(state: "MarketState", rt: "RuntimeConfig") -> list:
             "*/status* — Status lengkap (posisi, PnL, risk)\n"
             "*/scores* — Score semua TF saat ini\n"
             "*/report [1d|7d|30d|all]* — Performance report\n"
+            "*/setup* — Interactive setup wizard\n"
             "*/mode* — Lihat dan switch mode\n"
             "*/shadow* — Switch ke shadow mode\n"
             "*/live* — Switch ke live mode (butuh konfirmasi)\n"
@@ -614,6 +663,69 @@ def build_handlers(state: "MarketState", rt: "RuntimeConfig") -> list:
             await query.edit_message_text(text, parse_mode="Markdown",
                 reply_markup=_back_keyboard())
 
+        elif data == "setup_shadow":
+            result = rt.switch_to_shadow(by="telegram_setup")
+            await query.edit_message_text(
+                f"✅ Switched to SHADOW mode.\n\n{result}",
+                parse_mode="Markdown", reply_markup=main_menu_keyboard()
+            )
+
+        elif data == "setup_testnet":
+            if not config.HL_PRIVATE_KEY or not config.HL_ACCOUNT_ADDRESS:
+                await query.edit_message_text(
+                    "❌ *Cannot switch to testnet*\n\n"
+                    "Set these env vars first:\n"
+                    "```\n"
+                    "HL_REST_URL=https://api.hyperliquid-testnet.xyz\n"
+                    "HL_WS_URL=wss://api.hyperliquid-testnet.xyz/ws\n"
+                    "HL_PRIVATE_KEY=<testnet API wallet key>\n"
+                    "HL_ACCOUNT_ADDRESS=<testnet main wallet address>\n"
+                    "```\n"
+                    "Then restart the bot.",
+                    parse_mode="Markdown", reply_markup=main_menu_keyboard()
+                )
+            elif not config.IS_TESTNET:
+                await query.edit_message_text(
+                    "⚠️ *HL_REST_URL points to mainnet*\n\n"
+                    "Set `HL_REST_URL=https://api.hyperliquid-testnet.xyz` "
+                    "and restart to use testnet.",
+                    parse_mode="Markdown", reply_markup=main_menu_keyboard()
+                )
+            else:
+                result = rt.switch_to_live(
+                    hl_key=config.HL_PRIVATE_KEY,
+                    hl_address=config.HL_ACCOUNT_ADDRESS,
+                    by="telegram_setup",
+                )
+                await query.edit_message_text(
+                    f"🟠 *TESTNET MODE ACTIVE*\n\n{result}",
+                    parse_mode="Markdown", reply_markup=main_menu_keyboard()
+                )
+
+        elif data == "setup_live":
+            # Same as existing live confirm flow
+            msg = (
+                "⚠️ *KONFIRMASI LIVE MODE*\n"
+                "Order NYATA di Hyperliquid akan aktif.\n"
+                "Yakin?"
+            )
+            await query.edit_message_text(msg, parse_mode="Markdown",
+                reply_markup=live_confirm_keyboard())
+
+        elif data == "setup_bias_up":
+            rt.bias_threshold = min(rt.bias_threshold + 0.5, 10.0)
+            await query.edit_message_text(
+                f"📊 Bias threshold: `{rt.bias_threshold}`",
+                parse_mode="Markdown", reply_markup=config_menu_keyboard()
+            )
+
+        elif data == "setup_bias_down":
+            rt.bias_threshold = max(rt.bias_threshold - 0.5, 1.0)
+            await query.edit_message_text(
+                f"📊 Bias threshold: `{rt.bias_threshold}`",
+                parse_mode="Markdown", reply_markup=config_menu_keyboard()
+            )
+
         elif data == "force_close_execute":
             if state.position is not None:
                 from bayesmarket.engine.position import calculate_pnl
@@ -653,6 +765,7 @@ def build_handlers(state: "MarketState", rt: "RuntimeConfig") -> list:
         CommandHandler("close", cmd_close),
         CommandHandler("config", cmd_config),
         CommandHandler("set", cmd_set),
+        CommandHandler("setup", cmd_setup),
         CommandHandler("dashboard", cmd_dashboard),
         CommandHandler("analysis", cmd_analysis),
         CommandHandler("help", cmd_help),

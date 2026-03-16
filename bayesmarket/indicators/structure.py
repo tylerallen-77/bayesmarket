@@ -129,6 +129,6 @@ def compute_ha_score(klines: deque) -> tuple[int, float]:
             break
 
     streak = max(-max_streak, min(max_streak, streak))
-    ha_score = (streak / 3.0) * 1.5
+    ha_score = (streak / max_streak) * 1.5
 
     return streak, ha_score

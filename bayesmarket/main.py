@@ -33,6 +33,7 @@ from bayesmarket.feeds.synthetic import synthetic_trade_router
 from bayesmarket.risk.funding import funding_poller
 from bayesmarket.risk.limits import check_daily_reset
 from bayesmarket.runtime import RuntimeConfig
+from bayesmarket.startup import StartupConfig, apply_startup_config, run_startup_wizard
 from bayesmarket.telegram_bot.bot import telegram_bot_loop
 
 _use_colors = not config.IS_RAILWAY  # no color codes in Railway logs
@@ -71,10 +72,21 @@ async def _daily_reset_loop(state: MarketState) -> None:
         await asyncio.sleep(60)
 
 
-async def main() -> None:
+async def main(startup_cfg: StartupConfig | None = None) -> None:
     """Main entry point."""
-    # Init RuntimeConfig dari .env / defaults
+    # Apply startup wizard config if provided
+    if startup_cfg and not startup_cfg.skip_wizard:
+        apply_startup_config(startup_cfg)
+
+    # Init RuntimeConfig dari config (possibly overridden by wizard)
     rt = RuntimeConfig(live_mode=config.LIVE_MODE)
+
+    # Apply wizard overrides to runtime hot-reload params
+    if startup_cfg and not startup_cfg.skip_wizard:
+        rt.scoring_threshold_5m = startup_cfg.scoring_threshold
+        rt.bias_threshold = startup_cfg.bias_threshold
+        rt.vwap_sensitivity = startup_cfg.vwap_sensitivity
+        rt.poc_sensitivity = startup_cfg.poc_sensitivity
 
     mode = "LIVE" if rt.live_mode else "SHADOW"
     logger.info(
@@ -156,6 +168,11 @@ async def main() -> None:
 
 if __name__ == "__main__":
     try:
-        asyncio.run(main())
+        # Skip wizard on Railway (no TTY, use Telegram /setup)
+        if config.IS_RAILWAY:
+            asyncio.run(main())
+        else:
+            sc = run_startup_wizard()
+            asyncio.run(main(sc))
     except KeyboardInterrupt:
         pass
