@@ -108,6 +108,7 @@ BayesMarket is an automated perpetual futures trading engine designed for **Hype
 
 ### Execution & Risk
 - **3-Layer SL** — Wall > POC > ATR with structural-only tightening
+- **Trailing Stop** — ATR-based trail activates after TP1 hit
 - **Dual TP** — TP1 at VWAP (60%), TP2 at 2x ATR (40%)
 - **2% Risk Rule** — 5x leverage cap, cooldown FSM
 - **7% Daily Limit** — circuit breaker with 12h pause
@@ -117,20 +118,22 @@ BayesMarket is an automated perpetual futures trading engine designed for **Hype
 <tr>
 <td width="50%">
 
-### Monitoring
+### Monitoring & Analysis
 - **Rich Terminal** — 4-panel live dashboard
 - **Telegram Bot** — 16+ commands, inline keyboards
-- **Push Dashboard** — live ASCII ticker every 30s
 - **Loss Analysis** — 7-category auto-classification
+- **Correlation Tracker** — pairwise indicator independence tracking
+- **Backtest** — replay signals from DB for parameter validation
 
 </td>
 <td width="50%">
 
-### Deployment
+### Deployment & Safety
 - **Shadow Mode** — no credentials needed, simulate everything
+- **Position Reconciliation** — restore orphaned exchange positions on restart
 - **Testnet** — real orders with mock USDC
 - **Railway PaaS** — one-click cloud deploy
-- **Startup Wizard** — interactive setup on first launch
+- **58 Unit Tests** — scoring, position, sizing, risk state machine
 
 </td>
 </tr>
@@ -324,6 +327,7 @@ FULL STOP (no trading)
 | Emergency | **Pct** | 3% max distance cap |
 
 > **After entry:** SL only tightens on structural swing shifts. Never chases new walls. Min distance: 0.3x ATR.
+> **After TP1:** Trailing stop activates — trails 0.75x ATR behind best price, locks in profit.
 
 ### Daily Protection
 
@@ -487,7 +491,7 @@ Access via Telegram `/analysis` or stored in the `trades` table.
 | `MAX_RISK_PER_TRADE` | `2%` | Risk per trade |
 | `DAILY_LOSS_LIMIT` | `7%` | Daily drawdown breaker |
 | `CASCADE_BIAS_THRESHOLD` | `3.0` | 4h bias direction threshold |
-| `CASCADE_TIMING_ZONE_TTL` | `300s` | 15m zone time-to-live |
+| `CASCADE_TIMING_ZONE_TTL` | `600s` | 15m zone time-to-live |
 | `MAX_SL_TP_RATIO` | `3.0` | SL/TP distance cap |
 | `WALL_BIN_SIZE` | `$20` | Price binning for walls |
 | `KLINE_SOURCE` | `synthetic` | Primary kline source |
@@ -530,13 +534,15 @@ bayesmarket/
 │   ├── structure.py       # VWAP, POC (Volume Profile), Heikin Ashi
 │   ├── momentum.py        # RSI, MACD, EMA — all proportional
 │   ├── regime.py          # ATR(14), regime detection (trending/ranging)
-│   └── scoring.py         # Composite score + cascade signal generation
+│   ├── scoring.py         # Composite score + cascade signal generation
+│   └── correlation.py     # Pairwise indicator correlation tracking
 │
 ├── engine/
 │   ├── timeframe.py       # TimeframeEngine — one instance per TF
 │   ├── merge.py           # Cascade execution — 5m trigger pass-through
-│   ├── executor.py        # Entry/exit pipeline, SL/TP, time exit
+│   ├── executor.py        # Entry/exit pipeline, SL/TP, trailing stop
 │   ├── position.py        # Position state tracking, partial exits
+│   ├── reconcile.py       # Position reconciliation on startup (live mode)
 │   └── loss_analyzer.py   # Auto-classify losing trades (7 categories)
 │
 ├── risk/
@@ -546,7 +552,7 @@ bayesmarket/
 │
 ├── data/
 │   ├── state.py           # MarketState, TimeframeState, SignalSnapshot
-│   ├── storage.py         # SQLite interface — 4 tables
+│   ├── storage.py         # SQLite interface — 5 tables (thread-safe)
 │   └── recorder.py        # Market snapshot recorder (every 10s)
 │
 ├── dashboard/
@@ -564,6 +570,7 @@ bayesmarket/
 │   ├── bayesmarket.service # systemd unit file
 │   └── VPS_GUIDE.md       # Deployment guide
 │
+├── backtest.py            # Signal replay backtest framework
 ├── report.py              # CLI performance report tool
 ├── requirements.txt
 ├── .env.example           # Full env var template
@@ -590,6 +597,11 @@ python -m bayesmarket.report                    # Today's summary
 python -m bayesmarket.report --period 7d        # Last 7 days
 python -m bayesmarket.report --period all --detail  # All time + trade detail
 python -m bayesmarket.report --signals          # Signal distribution analysis
+
+# Backtest — replay signals from DB
+python -m bayesmarket.backtest                  # Default threshold 7.0
+python -m bayesmarket.backtest --threshold 8.0  # Test higher threshold
+python -m bayesmarket.backtest --capital 500    # Different starting capital
 ```
 
 <br>
@@ -663,7 +675,7 @@ After running 10+ minutes in shadow mode:
 
 | | |
 |:--:|---|
-| **Not a backtesting engine** | Real-time signals on live data only |
+| **Not a full backtesting engine** | Simple signal replay; not tick-level simulation |
 | **Not multi-asset** | BTC-PERP only for MVP |
 | **Not HFT** | Accuracy over speed — rejects ~85% of signals |
 | **Not financial advice** | Use at your own risk |
