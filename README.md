@@ -33,18 +33,20 @@ BayesMarket is an automated perpetual futures trading engine designed for **Hype
         +--------------------+--------------------+
         v                    v                    v
   +-----------+  +-----------+  +-----------+  +-----------+
-  |  5m ENGINE|  | 15m ENGINE|  | 1h ENGINE |  | 4h ENGINE |
-  | EXECUTION |  | EXECUTION |  |  FILTER   |  |  FILTER   |
-  | 9 scores  |  | 9 scores  |  | VWAP ref  |  | VWAP ref  |
-  +-----+-----+  +-----+-----+  +-----------+  +-----------+
-        |               |
-        v               v
-  +---------------------------+
-  |     SMART MERGE ENGINE    |     MTF soft penalty/bonus
-  |  Same dir -> combined     |     (not hard veto)
-  |  Conflict -> skip         |
-  +------------+--------------+
-               v
+  | 4h ENGINE |  | 1h ENGINE |  |15m ENGINE |  | 5m ENGINE |
+  |   BIAS    |  |  CONTEXT  |  |  TIMING   |  |  TRIGGER  |
+  | direction |  | confirms  |  | entry zone|  | execution |
+  +-----+-----+  +-----+-----+  +-----+-----+  +-----+-----+
+        |               |              |               |
+        v               v              v               v
+  +-----------------------------------------------------------+
+  |              CASCADE FILTER (top-down)                     |
+  |  4h score > ±3.0 -> LONG/SHORT bias                       |
+  |  1h same sign -> context confirmed                        |
+  |  15m threshold -> timing zone active (5min TTL)           |
+  |  5m score > threshold + all gates pass -> TRIGGER         |
+  +----------------------------+------------------------------+
+                               v
   +---------------------------+
   |     RISK MANAGEMENT       |
   |  2% risk | 5x lev | 7% DD|
@@ -72,13 +74,12 @@ BayesMarket is an automated perpetual futures trading engine designed for **Hype
 
 | Feature | Description |
 |---------|-------------|
-| **Multi-Timeframe** | 4 parallel TFs (5m, 15m execution + 1h, 4h filter) with soft MTF penalty/bonus |
+| **Cascade MTF** | Top-down: 4h BIAS -> 1h CONTEXT -> 15m TIMING -> 5m TRIGGER. Only 5m executes trades |
 | **9 Indicators** | CVD, OBI, Depth, VWAP, POC, Heikin Ashi, RSI, MACD, EMA — all proportional, zero binary |
-| **Smart Merge** | Combines 5m+15m signals when aligned; skips on conflict |
 | **3-Layer SL** | Wall (binned $20) -> POC -> ATR fallback with structural-only tightening |
 | **SL/TP Ratio Guard** | MAX_SL_TP_RATIO=3.0 caps absurd SL from stale POC levels |
 | **Dual TP** | TP1 at VWAP reversion (60%), TP2 at 2x ATR (40%) |
-| **Time-Based Exit** | Auto-close after 30m (5m TF) / 90m (15m TF) if TP1 not hit |
+| **Time-Based Exit** | Auto-close after 30m if TP1 not hit |
 | **Risk Engine** | 2% per trade, 5x leverage cap, cooldown FSM, 7% daily limit |
 | **Synthetic Klines** | Built from HL trades (zero price divergence), Binance Futures fallback |
 | **Rich Dashboard** | 4-panel live terminal with scores, walls, regime, position tracking |
@@ -123,7 +124,7 @@ python -m bayesmarket
 2. Connects to Hyperliquid WebSocket (l2Book + trades)
 3. Connects to Binance Futures WebSocket (fallback klines)
 4. Starts synthetic kline builders from HL trades
-5. Computes signals every 1s (execution TFs) / 3-5s (filter TFs)
+5. Runs cascade: 4h bias -> 1h context -> 15m timing -> 5m trigger
 6. Renders live 4-panel dashboard (local) or push dashboard (Telegram)
 7. Logs everything to `bayesmarket.db`
 
@@ -256,43 +257,51 @@ All indicators output **proportional scores** — no binary signals. The composi
 
 ### Signal Thresholds
 
-| Regime | Threshold | Action |
-|--------|-----------|--------|
-| Trending | +/-7.0 | Generate LONG/SHORT signal |
-| Ranging | +/-8.5 (15m) / +/-9.0 (5m) | Higher bar = fewer false signals |
+| Role | Regime | Threshold | Action |
+|------|--------|-----------|--------|
+| 4h BIAS | Any | +/-3.0 | Set allowed direction (LONG/SHORT/BOTH) |
+| 1h CONTEXT | Any | Same sign as 4h | Confirm or block cascade |
+| 15m TIMING | Any | Role threshold | Establish entry zone (5min TTL) |
+| 5m TRIGGER (trending) | Trending | +/-7.0 | Generate trade signal |
+| 5m TRIGGER (ranging) | Ranging | +/-9.0 | Higher bar = fewer false signals |
 
 ---
 
-## Signal Flow
+## Signal Flow (Cascade)
 
 ```
-Score >= +7.0 (trending)
-    |
+4h ENGINE (BIAS) — score > ±3.0?
+    |-- Yes: allowed_direction = LONG or SHORT
+    |-- No:  allowed_direction = BOTH (no filter)
     v
-MTF Filter: price > 1h VWAP?
-    |-- Aligned:   score += 1.5 bonus
-    |-- Misaligned: score *= 0.7 penalty
-    |-- Strong oppose (>= 3.5): BLOCKED
+1h ENGINE (CONTEXT) — score same sign as 4h?
+    |-- Yes: context_confirmed = true
+    |-- No:  context_confirmed = false -> 5m BLOCKED
     v
-Funding Filter: danger tier against? --- Yes --> BLOCKED
-    | No
+15m ENGINE (TIMING) — score > threshold & matches bias?
+    |-- Yes: timing_zone = ACTIVE (5min TTL)
+    |-- No:  timing_zone = INACTIVE -> 5m BLOCKED
     v
-Risk Check: cooldown? daily limit? ---- Yes --> BLOCKED
-    | No
-    v
-Position open? --- Yes --> BLOCKED (unless merge eligible)
-    | No
-    v
-SMART MERGE with other execution TF
-    |
-    v
-SL DETERMINATION: Wall -> POC -> ATR (3-layer fallback)
-    |-- SL/TP ratio > 3.0? Cap SL distance
-    v
-POSITION SIZING: 2% risk, 5x leverage cap
-    |
-    v
-EXECUTE (shadow: simulate | live: limit ALO)
+5m ENGINE (TRIGGER) — score > ±7.0 (trending) / ±9.0 (ranging)
+    |-- Direction matches zone & bias?
+    |       |-- No: BLOCKED (trigger_against_zone / trigger_against_bias)
+    |       v
+    |   Funding Filter: danger tier against? --- Yes --> BLOCKED
+    |       | No
+    |       v
+    |   Risk Check: cooldown? daily limit? ---- Yes --> BLOCKED
+    |       | No
+    |       v
+    |   Position open? --- Yes --> BLOCKED
+    |       | No
+    |       v
+    |   SL DETERMINATION: Wall -> POC -> ATR (3-layer fallback)
+    |       |-- SL/TP ratio > 3.0? Cap SL distance
+    |       v
+    |   POSITION SIZING: 2% risk, 5x leverage cap
+    |       |
+    |       v
+    |   EXECUTE (shadow: simulate | live: limit ALO)
 ```
 
 ---
@@ -347,7 +356,7 @@ When a trade closes with a loss, BayesMarket automatically classifies the failur
 | `time_overheld` | Critical | Held >2x the time exit limit |
 | `trend_reversal` | Moderate | Score flipped direction during hold |
 | `choppy_market` | Moderate | Borderline entry score in ranging market |
-| `mtf_misaligned_entry` | Moderate | Filter TF was opposing at entry |
+| `cascade_misaligned` | Moderate | Cascade bias/context was weak at entry |
 | `normal_sl` | Minor | Clean SL, no anomaly detected |
 
 Diagnosis is stored in the `trades` table and surfaced via:
@@ -398,11 +407,11 @@ bayesmarket/
 │   ├── structure.py       # VWAP, POC (Volume Profile), Heikin Ashi
 │   ├── momentum.py        # RSI, MACD, EMA — all proportional
 │   ├── regime.py          # ATR(14), regime detection (trending/ranging)
-│   └── scoring.py         # Composite score + signal generation + MTF filter
+│   └── scoring.py         # Composite score + cascade signal generation
 │
 ├── engine/
 │   ├── timeframe.py       # TimeframeEngine — one instance per TF
-│   ├── merge.py           # Smart merge: 5 conflict resolution cases
+│   ├── merge.py           # Cascade execution — 5m trigger only
 │   ├── executor.py        # Entry/exit pipeline, SL/TP, time exit, loss analysis
 │   ├── position.py        # Position state tracking, partial exits
 │   └── loss_analyzer.py   # Auto-classify losing trades (7 categories)
@@ -468,7 +477,7 @@ All parameters are in `bayesmarket/config.py`. Key settings:
 | Parameter | Range | Default |
 |-----------|-------|---------|
 | `threshold_5m` | 1.0 - 15.0 | 7.0 |
-| `threshold_15m` | 1.0 - 15.0 | 7.0 |
+| `bias_threshold` | 1.0 - 10.0 | 3.0 |
 | `vwap_sensitivity` | 1.0 - 500.0 | 150.0 |
 | `poc_sensitivity` | 1.0 - 500.0 | 150.0 |
 

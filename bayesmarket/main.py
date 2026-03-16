@@ -1,12 +1,16 @@
 """BayesMarket MVP — Entry point, async orchestration.
 
+Cascade MTF Architecture:
+  4h (BIAS) -> 1h (CONTEXT) -> 15m (TIMING zone) -> 5m (TRIGGER)
+  Only 5m generates trade entries. Higher TFs filter and confirm.
+
 Tasks:
-- 3 data feeds (HL book, HL trades, Binance fallback)
-- 4 signal engines (5m, 15m, 1h, 4h)
-- 2 execution loops (merge+execute, position monitor)
+- 3 data feeds (HL book, HL trades, Binance fallback) + synthetic router
+- 4 signal engines: 4h bias, 1h context, 15m timing, 5m trigger
+- 2 execution loops (cascade entry, position monitor)
 - 3 background (funding, daily reset, snapshot recorder)
-- 1 Telegram bot (control panel)
-- 1 dashboard (terminal)
+- 1 Telegram bot (control panel + push dashboard)
+- 1 terminal dashboard (disabled on Railway)
 """
 
 import asyncio
@@ -101,13 +105,13 @@ async def main() -> None:
         binance_kline_feed(state),
         synthetic_trade_router(state),
 
-        # Signal engines
-        engines["5m"].run(),
-        engines["15m"].run(),
-        engines["1h"].run(),
-        engines["4h"].run(),
+        # Cascade signal engines (4h BIAS -> 1h CTX -> 15m TIMING -> 5m TRIGGER)
+        engines["4h"].run(),      # bias: sets allowed direction
+        engines["1h"].run(),      # context: confirms bias
+        engines["15m"].run(),     # timing: establishes entry zone
+        engines["5m"].run(),      # trigger: executes within zone
 
-        # Execution
+        # Execution (5m trigger only, no merge needed)
         merge_and_execute_loop(state, storage),
         position_monitor_loop(state, storage),
 

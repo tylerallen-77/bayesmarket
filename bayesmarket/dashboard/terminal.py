@@ -105,8 +105,7 @@ def _build_tf_panel(state: MarketState, tf_name: str) -> Panel:
     tf_state = state.tf_states.get(tf_name)
     snap: SignalSnapshot = tf_state.signal if tf_state else None
     tf_cfg = config.TIMEFRAMES.get(tf_name, {})
-    role = tf_cfg.get("role", "execution")
-    mtf_tf = tf_cfg.get("mtf_filter_tf")
+    role = tf_cfg.get("role", "trigger")
 
     table = Table(show_header=False, box=None, padding=(0, 1), expand=True)
     table.add_column("label", style="dim", width=13)
@@ -139,23 +138,31 @@ def _build_tf_panel(state: MarketState, tf_name: str) -> Panel:
     regime_str = f"[{regime_color}]{snap.regime.upper()}[/{regime_color}]  ATR%: {snap.atr_percentile:.0f}"
     table.add_row("Regime", regime_str)
 
-    # ── MTF ───────────────────────────────────────────────────────────────────
-    if mtf_tf:
-        mtf_state = state.tf_states.get(mtf_tf)
-        mtf_snap = mtf_state.signal if mtf_state else None
-        if mtf_snap and mtf_snap.vwap_value:
-            price_vs = state.mid_price
-            aligned_long = price_vs > mtf_snap.vwap_value
-            aligned_short = price_vs < mtf_snap.vwap_value
-            align_label = (
-                "[green]▲ LONG OK[/green]" if aligned_long
-                else "[red]▼ SHORT OK[/red]"
-            )
-            table.add_row(f"MTF({mtf_tf})", f"${mtf_snap.vwap_value:,.0f}  {align_label}")
-        else:
-            table.add_row(f"MTF({mtf_tf})", "[dim]loading...[/dim]")
-    else:
-        table.add_row(f"Role", f"[cyan]FILTER[/cyan]  (no MTF gate)")
+    # ── CASCADE ROLE ────────────────────────────────────────────────────────
+    role_labels = {"bias": "BIAS", "context": "CTX", "timing": "ZONE", "trigger": "TRIG"}
+    role_tag = role_labels.get(role, role.upper())
+    if role == "bias":
+        dir_str = snap.cascade_allowed_direction
+        dir_color = "green" if dir_str == "LONG" else ("red" if dir_str == "SHORT" else "yellow")
+        table.add_row(f"[cyan]{role_tag}[/cyan]", f"[{dir_color}]{dir_str}[/{dir_color}]")
+    elif role == "context":
+        confirmed = snap.cascade_context_confirmed
+        conf_label = "[green]CONFIRMED[/green]" if confirmed else "[red]NOT CONFIRMED[/red]"
+        table.add_row(f"[cyan]{role_tag}[/cyan]", f"Bias:{snap.cascade_allowed_direction}  {conf_label}")
+    elif role == "timing":
+        zone = snap.cascade_timing_zone_direction or "NONE"
+        zone_color = "green" if zone == "LONG" else ("red" if zone == "SHORT" else "dim")
+        age = ""
+        if snap.cascade_timing_zone_active and snap.cascade_timing_zone_timestamp > 0:
+            age_s = time.time() - snap.cascade_timing_zone_timestamp
+            age = f" ({int(age_s)}s)"
+        table.add_row(f"[cyan]{role_tag}[/cyan]", f"[{zone_color}]Zone:{zone}{age}[/{zone_color}]")
+    elif role == "trigger":
+        cascade_ok = snap.cascade_timing_zone_active
+        cascade_label = "[green]READY[/green]" if cascade_ok else f"[dim]WAITING[/dim]"
+        if snap.cascade_blocked_reason:
+            cascade_label = f"[yellow]{snap.cascade_blocked_reason}[/yellow]"
+        table.add_row(f"[cyan]{role_tag}[/cyan]", cascade_label)
 
     # ── CATEGORY BREAKDOWN ────────────────────────────────────────────────────
     cat_str = (
@@ -274,10 +281,12 @@ def _build_status_bar(state: MarketState) -> Panel:
             f"PnL [{pnl_color}][bold]${unrealized:+.2f}[/bold] ({pnl_pct:+.2f}%)[/{pnl_color}]  "
             f"[dim]{int(dur//60)}m {int(dur%60)}s open[/dim]"
         )
-        src_str = f"src: [bold]{'+'.join(pos.source_tfs)}[/bold]"
+        src_str = f"src: [bold]cascade_5m[/bold]"
     else:
         pos_str = "[dim]── No open position ──[/dim]"
-        src_str = ""
+        cascade_dir = state.cascade_allowed_direction
+        ctx_ok = "✓" if state.cascade_context_confirmed else "✗"
+        src_str = f"4h:[bold]{cascade_dir}[/bold] 1h:{ctx_ok}"
 
     # Col 2: System
     risk = state.risk

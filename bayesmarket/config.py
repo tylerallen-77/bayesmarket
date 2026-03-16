@@ -40,16 +40,17 @@ COIN = os.getenv("COIN", "BTC")
 BINANCE_SYMBOL = os.getenv("BINANCE_SYMBOL", "BTCUSDT")
 
 # ══════════════════════════════════════════════════════════════════
-# MULTI-TIMEFRAME ARCHITECTURE
+# MULTI-TIMEFRAME CASCADE ARCHITECTURE
+# 4h (BIAS) → 1h (CONTEXT) → 15m (TIMING) → 5m (TRIGGER)
 # ══════════════════════════════════════════════════════════════════
 TIMEFRAMES = {
     "5m": {
-        "role": "execution",
+        "role": "trigger",
+        "cascade_parent": "15m",
         "kline_interval": "1m",
         "kline_interval_seconds": 60,
         "kline_bootstrap": 150,
         "kline_max": 200,
-        "mtf_filter_tf": "1h",
         "scoring_threshold": 7.0,
         "scoring_threshold_ranging": 9.0,
         "obi_band_pct": 0.5,
@@ -57,12 +58,12 @@ TIMEFRAMES = {
         "signal_refresh_seconds": 1.0,
     },
     "15m": {
-        "role": "execution",
+        "role": "timing",
+        "cascade_parent": "1h",
         "kline_interval": "5m",
         "kline_interval_seconds": 300,
         "kline_bootstrap": 150,
         "kline_max": 200,
-        "mtf_filter_tf": "4h",
         "scoring_threshold": 7.0,
         "scoring_threshold_ranging": 8.5,
         "obi_band_pct": 0.75,
@@ -70,12 +71,12 @@ TIMEFRAMES = {
         "signal_refresh_seconds": 1.0,
     },
     "1h": {
-        "role": "filter",
+        "role": "context",
+        "cascade_parent": "4h",
         "kline_interval": "15m",
         "kline_interval_seconds": 900,
         "kline_bootstrap": 100,
         "kline_max": 150,
-        "mtf_filter_tf": None,
         "scoring_threshold": 7.0,
         "scoring_threshold_ranging": 8.0,
         "obi_band_pct": 1.0,
@@ -83,12 +84,12 @@ TIMEFRAMES = {
         "signal_refresh_seconds": 3.0,
     },
     "4h": {
-        "role": "filter",
+        "role": "bias",
+        "cascade_parent": None,
         "kline_interval": "1h",
         "kline_interval_seconds": 3600,
         "kline_bootstrap": 100,
         "kline_max": 150,
-        "mtf_filter_tf": None,
         "scoring_threshold": 7.0,
         "scoring_threshold_ranging": 8.0,
         "obi_band_pct": 1.0,
@@ -96,6 +97,13 @@ TIMEFRAMES = {
         "signal_refresh_seconds": 5.0,
     },
 }
+
+# ══════════════════════════════════════════════════════════════════
+# CASCADE MTF PARAMETERS
+# ══════════════════════════════════════════════════════════════════
+CASCADE_BIAS_THRESHOLD = 3.0       # 4h score > +3 = LONG only, < -3 = SHORT only
+CASCADE_CONTEXT_SAME_SIGN = True   # 1h must match 4h direction sign
+CASCADE_TIMING_ZONE_TTL = 300      # 15m zone valid for 5 minutes (seconds)
 
 # ══════════════════════════════════════════════════════════════════
 # CONNECTIONS
@@ -184,9 +192,8 @@ ATR_RANGING_PERCENTILE = 30
 ATR_PERCENTILE_LOOKBACK = 100
 
 # ══════════════════════════════════════════════════════════════════
-# SMART MERGE
+# EXECUTION (cascade mode: 5m trigger only, no merge)
 # ══════════════════════════════════════════════════════════════════
-MERGE_MAX_SIZE_MULTIPLIER = 2.0
 
 # ══════════════════════════════════════════════════════════════════
 # RISK MANAGEMENT

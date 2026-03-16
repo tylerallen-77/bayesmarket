@@ -1,12 +1,10 @@
-"""Composite bias score aggregation per TF — signal generation.
+"""Composite bias score aggregation per TF — cascade signal generation.
 
-Changes from original:
-  1. Thresholds pulled from RuntimeConfig if available (hot-reload via Telegram /set)
-  2. MTF filter is a soft penalty/bonus, not a hard veto
-     - Aligned:   score += MTF_ALIGNMENT_BONUS (default +1.5)
-     - Misaligned: score *= MTF_MISALIGN_PENALTY (default 0.7), still can signal
-     - Exception: if misalignment is strong (filter TF score strongly opposing),
-       block is reinstated to prevent counter-trend trap
+Architecture: 4h (BIAS) → 1h (CONTEXT) → 15m (TIMING) → 5m (TRIGGER)
+- 4h determines allowed direction (LONG/SHORT/BOTH)
+- 1h confirms 4h bias (same sign check)
+- 15m establishes entry zone within confirmed bias
+- 5m triggers execution only within active 15m zone
 """
 
 import time
@@ -27,14 +25,9 @@ from bayesmarket.indicators.regime import detect_regime
 
 logger = structlog.get_logger()
 
-# MTF hierarchy constants
-MTF_ALIGNMENT_BONUS = 1.5      # added to score when MTF agrees
-MTF_MISALIGN_PENALTY = 0.7     # multiplier when MTF disagrees (softer than hard block)
-MTF_STRONG_OPPOSE_THRESHOLD = 3.5  # lowered from 5.0 — blocks entry when filter TF score opposes at ±3.5+
-
 
 def compute_signal(state: MarketState, tf_name: str) -> SignalSnapshot:
-    """Compute all indicators and generate a signal for one timeframe."""
+    """Compute all indicators and route to cascade role handler."""
     tf_state = state.tf_states[tf_name]
     tf_cfg = config.TIMEFRAMES[tf_name]
     mid = state.mid_price
@@ -77,84 +70,173 @@ def compute_signal(state: MarketState, tf_name: str) -> SignalSnapshot:
     snap.funding_rate = state.funding_rate
     snap.funding_tier = state.funding_tier
 
-    # Filter TFs: compute only, no signal
-    if tf_cfg["role"] != "execution":
-        tf_state.signal = snap
-        return snap
+    # ── Cascade role dispatch ─────────────────────────────────────
+    role = tf_cfg["role"]
 
-    # ── Threshold — use RuntimeConfig if available (hot-reload) ───
-    rt = state.runtime
-    if rt:
-        if tf_name == "5m":
-            threshold = rt.scoring_threshold_5m
-        elif tf_name == "15m":
-            threshold = rt.scoring_threshold_15m
-    snap.active_threshold = threshold
+    if role == "bias":
+        _evaluate_bias(snap, state)
+    elif role == "context":
+        _evaluate_context(snap, state)
+    elif role == "timing":
+        _evaluate_timing(snap, state, tf_state)
+    elif role == "trigger":
+        _evaluate_trigger(snap, state, tf_state)
 
-    # ── Signal decision ───────────────────────────────────────────
+    tf_state.signal = snap
+    return snap
+
+
+# ── Cascade evaluation functions ─────────────────────────────────────────────
+
+
+def _evaluate_bias(snap: SignalSnapshot, state: MarketState) -> None:
+    """4h BIAS: determines allowed trading direction for entire cascade."""
+    threshold = config.CASCADE_BIAS_THRESHOLD
+    if snap.total_score >= threshold:
+        direction = "LONG"
+    elif snap.total_score <= -threshold:
+        direction = "SHORT"
+    else:
+        direction = "BOTH"
+
+    state.cascade_allowed_direction = direction
+    snap.cascade_allowed_direction = direction
+    snap.signal = "NEUTRAL"  # bias TF never generates trade signals
+
+
+def _evaluate_context(snap: SignalSnapshot, state: MarketState) -> None:
+    """1h CONTEXT: must confirm 4h bias direction."""
+    allowed = state.cascade_allowed_direction
+    snap.cascade_allowed_direction = allowed
+
+    if allowed == "BOTH":
+        # 4h neutral — context passes through
+        confirmed = True
+    elif allowed == "LONG":
+        confirmed = snap.total_score > 0
+    elif allowed == "SHORT":
+        confirmed = snap.total_score < 0
+    else:
+        confirmed = False
+
+    state.cascade_context_confirmed = confirmed
+    snap.cascade_context_confirmed = confirmed
+    snap.signal = "NEUTRAL"  # context TF never generates trade signals
+
+
+def _evaluate_timing(
+    snap: SignalSnapshot, state: MarketState, tf_state: TimeframeState
+) -> None:
+    """15m TIMING: identifies entry zone when 4h+1h agree."""
+    snap.cascade_allowed_direction = state.cascade_allowed_direction
+    snap.cascade_context_confirmed = state.cascade_context_confirmed
+
+    # If context not confirmed, clear zone
+    if not state.cascade_context_confirmed:
+        tf_state.active_zone_direction = None
+        tf_state.active_zone_timestamp = 0.0
+        snap.cascade_timing_zone_active = False
+        snap.cascade_blocked_reason = "context_not_confirmed"
+        snap.signal = "NEUTRAL"
+        return
+
+    # Threshold check
+    threshold = snap.active_threshold
+    raw_signal = "NEUTRAL"
+    if snap.total_score >= threshold:
+        raw_signal = "LONG"
+    elif snap.total_score <= -threshold:
+        raw_signal = "SHORT"
+
+    # Direction must match allowed direction from 4h bias
+    allowed = state.cascade_allowed_direction
+    if raw_signal != "NEUTRAL" and allowed != "BOTH" and raw_signal != allowed:
+        raw_signal = "NEUTRAL"
+        snap.cascade_blocked_reason = "timing_against_bias"
+
+    if raw_signal != "NEUTRAL":
+        # Establish or refresh zone
+        tf_state.active_zone_direction = raw_signal
+        tf_state.active_zone_timestamp = time.time()
+        snap.cascade_timing_zone_active = True
+        snap.cascade_timing_zone_direction = raw_signal
+        snap.cascade_timing_zone_timestamp = time.time()
+    else:
+        # Check TTL on existing zone
+        if tf_state.active_zone_direction:
+            age = time.time() - tf_state.active_zone_timestamp
+            if age > config.CASCADE_TIMING_ZONE_TTL:
+                tf_state.active_zone_direction = None
+                tf_state.active_zone_timestamp = 0.0
+                snap.cascade_timing_zone_active = False
+            else:
+                # Zone still valid from earlier
+                snap.cascade_timing_zone_active = True
+                snap.cascade_timing_zone_direction = tf_state.active_zone_direction
+                snap.cascade_timing_zone_timestamp = tf_state.active_zone_timestamp
+        else:
+            snap.cascade_timing_zone_active = False
+
+    snap.signal = "NEUTRAL"  # timing TF never generates trade signals
+
+
+def _evaluate_trigger(
+    snap: SignalSnapshot, state: MarketState, tf_state: TimeframeState
+) -> None:
+    """5m TRIGGER: generates actual trade signals only within 15m zone."""
+    snap.cascade_allowed_direction = state.cascade_allowed_direction
+    snap.cascade_context_confirmed = state.cascade_context_confirmed
     snap.signal = "NEUTRAL"
     snap.signal_blocked_reason = None
 
+    # ── Check 15m timing zone ────────────────────────────────────
+    tf_15m = state.tf_states.get("15m")
+    zone_active = False
+    zone_direction = None
+    if tf_15m and tf_15m.active_zone_direction:
+        age = time.time() - tf_15m.active_zone_timestamp
+        if age <= config.CASCADE_TIMING_ZONE_TTL:
+            zone_active = True
+            zone_direction = tf_15m.active_zone_direction
+
+    snap.cascade_timing_zone_active = zone_active
+    snap.cascade_timing_zone_direction = zone_direction
+
+    if not zone_active:
+        snap.cascade_blocked_reason = "no_timing_zone"
+        return
+
+    # ── RuntimeConfig threshold override ─────────────────────────
+    rt = state.runtime
+    threshold = snap.active_threshold
+    if rt:
+        threshold = rt.scoring_threshold_5m
+    snap.active_threshold = threshold
+
+    # ── Threshold check ──────────────────────────────────────────
     if snap.total_score >= threshold:
         snap.signal = "LONG"
     elif snap.total_score <= -threshold:
         snap.signal = "SHORT"
     else:
-        tf_state.signal = snap
-        return snap
+        return
 
-    # ── MTF hierarchy filter (soft penalty, not hard veto) ────────
-    mtf_tf_name = tf_cfg["mtf_filter_tf"]
-    if mtf_tf_name:
-        mtf_state = state.tf_states.get(mtf_tf_name)
-        if mtf_state and mtf_state.signal:
-            mtf_snap = mtf_state.signal
-            snap.mtf_vwap = mtf_snap.vwap_value
+    # ── Direction must match zone direction ──────────────────────
+    if snap.signal != zone_direction:
+        snap.cascade_blocked_reason = "trigger_against_zone"
+        snap.signal = "NEUTRAL"
+        return
 
-            if snap.mtf_vwap and snap.mtf_vwap > 0:
-                snap.mtf_aligned_long = mid > snap.mtf_vwap
-                snap.mtf_aligned_short = mid < snap.mtf_vwap
+    # ── Direction must match 4h allowed direction ────────────────
+    allowed = state.cascade_allowed_direction
+    if allowed != "BOTH" and snap.signal != allowed:
+        snap.cascade_blocked_reason = "trigger_against_bias"
+        snap.signal = "NEUTRAL"
+        return
 
-                if snap.signal == "LONG":
-                    if snap.mtf_aligned_long:
-                        # MTF agrees → bonus
-                        snap.total_score += MTF_ALIGNMENT_BONUS
-                    else:
-                        # MTF disagrees → check strength
-                        if mtf_snap.total_score <= -MTF_STRONG_OPPOSE_THRESHOLD:
-                            # Filter TF strongly bearish, hard block LONG
-                            snap.signal_blocked_reason = "mtf_strong_oppose"
-                            snap.signal = "NEUTRAL"
-                        else:
-                            # Soft penalty
-                            snap.total_score *= MTF_MISALIGN_PENALTY
-                            snap.signal_blocked_reason = "mtf_soft_penalty"
-                            # Re-check threshold after penalty
-                            if snap.total_score < threshold:
-                                snap.signal = "NEUTRAL"
-                            else:
-                                snap.signal_blocked_reason = None
+    snap.cascade_blocked_reason = None
 
-                elif snap.signal == "SHORT":
-                    if snap.mtf_aligned_short:
-                        snap.total_score -= MTF_ALIGNMENT_BONUS  # more negative = stronger SHORT
-                    else:
-                        if mtf_snap.total_score >= MTF_STRONG_OPPOSE_THRESHOLD:
-                            snap.signal_blocked_reason = "mtf_strong_oppose"
-                            snap.signal = "NEUTRAL"
-                        else:
-                            snap.total_score *= MTF_MISALIGN_PENALTY
-                            snap.signal_blocked_reason = "mtf_soft_penalty"
-                            if snap.total_score > -threshold:
-                                snap.signal = "NEUTRAL"
-                            else:
-                                snap.signal_blocked_reason = None
-
-    if snap.signal == "NEUTRAL":
-        tf_state.signal = snap
-        return snap
-
-    # ── Funding filter ────────────────────────────────────────────
+    # ── Funding filter ───────────────────────────────────────────
     if snap.funding_tier == "danger":
         against = (
             (state.funding_rate > 0 and snap.signal == "LONG")
@@ -163,21 +245,19 @@ def compute_signal(state: MarketState, tf_name: str) -> SignalSnapshot:
         if against:
             snap.signal_blocked_reason = "funding_danger"
             snap.signal = "NEUTRAL"
+            return
 
-    # ── Runtime pause check ───────────────────────────────────────
-    if snap.signal != "NEUTRAL" and rt and rt.trading_paused:
+    # ── Runtime pause check ──────────────────────────────────────
+    if rt and rt.trading_paused:
         snap.signal_blocked_reason = "trading_paused"
         snap.signal = "NEUTRAL"
+        return
 
-    # ── Risk state checks ─────────────────────────────────────────
-    if snap.signal != "NEUTRAL":
-        risk = state.risk
-        if risk.daily_paused:
-            snap.signal_blocked_reason = "daily_paused"
-            snap.signal = "NEUTRAL"
-        elif risk.full_stop_active:
-            snap.signal_blocked_reason = "full_stop"
-            snap.signal = "NEUTRAL"
-
-    tf_state.signal = snap
-    return snap
+    # ── Risk state checks ────────────────────────────────────────
+    risk = state.risk
+    if risk.daily_paused:
+        snap.signal_blocked_reason = "daily_paused"
+        snap.signal = "NEUTRAL"
+    elif risk.full_stop_active:
+        snap.signal_blocked_reason = "full_stop"
+        snap.signal = "NEUTRAL"

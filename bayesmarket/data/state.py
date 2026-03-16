@@ -111,10 +111,13 @@ class SignalSnapshot:
     regime: str = "trending"
     active_threshold: float = 7.0
 
-    # MTF filter (only for execution TFs)
-    mtf_vwap: Optional[float] = None
-    mtf_aligned_long: bool = True
-    mtf_aligned_short: bool = True
+    # Cascade state
+    cascade_allowed_direction: str = "BOTH"       # from 4h bias: "LONG", "SHORT", "BOTH"
+    cascade_context_confirmed: bool = False        # 1h confirms 4h
+    cascade_timing_zone_active: bool = False       # 15m has active entry zone
+    cascade_timing_zone_direction: Optional[str] = None  # direction of 15m zone
+    cascade_timing_zone_timestamp: float = 0.0
+    cascade_blocked_reason: Optional[str] = None
 
     # Funding
     funding_rate: float = 0.0
@@ -178,13 +181,16 @@ class RiskState:
 class TimeframeState:
     """Per-TF state. Each of 4 TFs has one instance."""
     name: str
-    role: str  # "execution" or "filter"
+    role: str  # "bias", "context", "timing", "trigger"
     klines: deque = field(default_factory=lambda: deque(maxlen=200))
     current_kline: Optional[Candle] = None
     signal: Optional[SignalSnapshot] = None
     cvd_history: deque = field(default_factory=lambda: deque(maxlen=100))
     using_fallback: bool = False
     last_hl_trade_time: float = 0.0
+    # Cascade zone tracking (timing TF)
+    active_zone_direction: Optional[str] = None
+    active_zone_timestamp: float = 0.0
 
 
 @dataclass
@@ -220,6 +226,10 @@ class MarketState:
     capital: float = 1000.0
     start_time: float = field(default_factory=time.time)
     kline_source: str = "synthetic"
+
+    # Cascade state (computed from 4h→1h→15m chain)
+    cascade_allowed_direction: str = "BOTH"
+    cascade_context_confirmed: bool = False
 
     # Runtime config (attached in main.py, not default-constructed to avoid import cycle)
     runtime: Optional["RuntimeConfig"] = field(default=None, repr=False)

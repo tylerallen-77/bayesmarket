@@ -61,13 +61,11 @@ def _evaluate_entry(state: MarketState, storage: Storage) -> None:
     if not allowed:
         return
 
-    # ── Signal evaluation ─────────────────────────────────────────
+    # ── Signal evaluation (cascade: 5m trigger only) ───────────────
     sig_5m = state.tf_states.get("5m")
-    sig_15m = state.tf_states.get("15m")
     signal_5m = sig_5m.signal if sig_5m else None
-    signal_15m = sig_15m.signal if sig_15m else None
 
-    decision = evaluate_merge(signal_5m, signal_15m)
+    decision = evaluate_merge(signal_5m)
     if decision.action == "none":
         return
 
@@ -137,7 +135,7 @@ def _evaluate_entry(state: MarketState, storage: Storage) -> None:
 
     # ── Create position ───────────────────────────────────────────
     score_5m = signal_5m.total_score if signal_5m else None
-    score_15m = signal_15m.total_score if signal_15m else None
+    score_15m = None  # 15m is timing TF in cascade mode
 
     position = create_position(
         side=decision.direction.lower(),
@@ -298,11 +296,7 @@ def _monitor_position(state: MarketState, storage: Storage) -> None:
     # ── Time-based exit ───────────────────────────────────────────
     if config.TIME_EXIT_ENABLED and not pos.tp1_hit:
         elapsed_min = (time.time() - pos.entry_time) / 60
-        limit_min = (
-            config.TIME_EXIT_MINUTES_5M
-            if "5m" in pos.source_tfs
-            else config.TIME_EXIT_MINUTES_15M
-        )
+        limit_min = config.TIME_EXIT_MINUTES_5M
         if elapsed_min >= limit_min:
             pnl = calculate_pnl(pos.side, pos.entry_price, mid, pos.remaining_size)
             total_pnl = pos.pnl_realized + pnl

@@ -95,6 +95,14 @@ def build_dashboard_text(state: "MarketState", rt: "RuntimeConfig") -> str:
         else:
             lines.append(f"{'SCORE ' + tf:<16}| warming... | –")
 
+    # ── Cascade status ─────────────────────────────────────────────────────────
+    tf_15m = state.tf_states.get("15m")
+    zone = tf_15m.active_zone_direction if (tf_15m and tf_15m.active_zone_direction) else "NONE"
+    ctx_ok = "Y" if state.cascade_context_confirmed else "N"
+    lines.append(
+        f"{'CASCADE':<16}| {state.cascade_allowed_direction:<12}| "
+        f"CTX:{ctx_ok} Z:{zone}"
+    )
     lines.append(f"{'-'*16}|{'-'*13}|{'-'*10}")
 
     # ── Categories (5m) ────────────────────────────────────────────────────────
@@ -160,10 +168,12 @@ def build_dashboard_text(state: "MarketState", rt: "RuntimeConfig") -> str:
         direction = "naik" if snap5.signal == "LONG" else "turun"
         lines += [
             "",
-            f"🧠 *Penjelasan Signal ({snap5.signal} — 5m)*",
+            f"🧠 *Signal ({snap5.signal} — 5m TRIGGER)*",
             f"Score: `{snap5.total_score:+.1f}` | Threshold: `{snap5.active_threshold}`",
-            f"Bias order flow dan struktur menunjukkan tekanan {direction}.",
+            f"Cascade: 4h={snap5.cascade_allowed_direction} → 1h={'✓' if snap5.cascade_context_confirmed else '✗'} → 15m={'Active' if snap5.cascade_timing_zone_active else 'None'}",
         ]
+        if snap5.cascade_blocked_reason:
+            lines.append(f"⚠️ Cascade: `{snap5.cascade_blocked_reason}`")
         if snap5.signal_blocked_reason:
             lines.append(f"⚠️ Blocked: `{snap5.signal_blocked_reason}`")
 

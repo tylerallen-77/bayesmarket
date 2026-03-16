@@ -39,10 +39,14 @@ class TimeframeEngine:
                         logger.info(
                             "signal_generated",
                             tf=self.tf_name,
+                            role=self.tf_cfg.get("role", "unknown"),
                             signal=snap.signal,
                             score=round(snap.total_score, 2),
                             threshold=snap.active_threshold,
                             regime=snap.regime,
+                            cascade_dir=snap.cascade_allowed_direction,
+                            cascade_ctx=snap.cascade_context_confirmed,
+                            cascade_zone=snap.cascade_timing_zone_active,
                             blocked=snap.signal_blocked_reason,
                         )
             except Exception as exc:

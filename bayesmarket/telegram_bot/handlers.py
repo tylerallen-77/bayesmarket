@@ -83,26 +83,39 @@ def _format_status(state: "MarketState", rt: "RuntimeConfig") -> str:
 
 
 def _format_scores(state: "MarketState") -> str:
-    lines = ["*📊 CURRENT SCORES*", "━━━━━━━━━━━━━━━━━━━━"]
+    role_labels = {"bias": "BIAS", "context": "CTX", "timing": "ZONE", "trigger": "TRIG"}
+    lines = ["*📊 CASCADE SCORES*", "━━━━━━━━━━━━━━━━━━━━"]
     lines.append(f"Mid: `${state.mid_price:,.1f}`")
+    lines.append(f"Cascade: `{state.cascade_allowed_direction}` | 1h: `{'✓' if state.cascade_context_confirmed else '✗'}`")
     lines.append("")
 
-    for tf_name in ["5m", "15m", "1h", "4h"]:
+    for tf_name in ["4h", "1h", "15m", "5m"]:
+        tf_cfg = config.TIMEFRAMES.get(tf_name, {})
+        role_label = role_labels.get(tf_cfg.get("role", ""), "?")
         tf_state = state.tf_states.get(tf_name)
         snap = tf_state.signal if tf_state else None
         if snap:
             bar_len = int(min(abs(snap.total_score) / 13.5 * 8, 8))
             bar = "█" * bar_len + "░" * (8 - bar_len)
             sig = snap.signal
-            if snap.signal_blocked_reason:
+            if snap.cascade_blocked_reason:
+                sig += f" [{snap.cascade_blocked_reason}]"
+            elif snap.signal_blocked_reason:
                 sig += f" [{snap.signal_blocked_reason}]"
+            cascade_info = ""
+            if tf_name == "4h":
+                cascade_info = f"  Dir: `{snap.cascade_allowed_direction}`"
+            elif tf_name == "1h":
+                cascade_info = f"  Confirmed: `{'YES' if snap.cascade_context_confirmed else 'NO'}`"
+            elif tf_name == "15m":
+                zone = tf_state.active_zone_direction or "NONE"
+                cascade_info = f"  Zone: `{zone}`"
             lines.append(
-                f"*{tf_name}* `{snap.total_score:+.1f}` {bar} `{sig}`\n"
+                f"*{tf_name}* [{role_label}] `{snap.total_score:+.1f}` {bar} `{sig}`{cascade_info}\n"
                 f"  A:`{snap.category_a:+.1f}` B:`{snap.category_b:+.1f}` C:`{snap.category_c:+.1f}`\n"
-                f"  VWAP:`${snap.vwap_value:,.0f}` RSI:`{snap.rsi_value:.1f}`\n"
             )
         else:
-            lines.append(f"*{tf_name}* warming up...")
+            lines.append(f"*{tf_name}* [{role_label}] warming up...")
     return "\n".join(lines)
 
 
@@ -187,8 +200,7 @@ def _format_config(rt: "RuntimeConfig") -> str:
         f"Status:        `{rt.status_label}`",
         f"",
         f"*Scoring Thresholds:*",
-        f"  5m:  `{rt.scoring_threshold_5m}`",
-        f"  15m: `{rt.scoring_threshold_15m}`",
+        f"  5m (trigger):  `{rt.scoring_threshold_5m}`",
         f"",
         f"*Sensitivities:*",
         f"  VWAP: `{rt.vwap_sensitivity}`",
@@ -320,14 +332,14 @@ def build_handlers(state: "MarketState", rt: "RuntimeConfig") -> list:
     async def cmd_set(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         """
         Usage: /set <param> <value>
-        Params: threshold_5m, threshold_15m, vwap_sensitivity, poc_sensitivity
+        Params: threshold_5m, bias_threshold, vwap_sensitivity, poc_sensitivity
         """
         if not ctx.args or len(ctx.args) < 2:
             await update.message.reply_text(
                 "Usage: `/set <param> <value>`\n\n"
                 "Params:\n"
-                "  `threshold_5m` — scoring threshold 5m (default 7.0)\n"
-                "  `threshold_15m` — scoring threshold 15m (default 7.0)\n"
+                "  `threshold_5m` — trigger scoring threshold (default 7.0)\n"
+                "  `bias_threshold` — 4h cascade bias threshold (default 3.0)\n"
                 "  `vwap_sensitivity` — VWAP sensitivity (default 150.0)\n"
                 "  `poc_sensitivity` — POC sensitivity (default 150.0)",
                 parse_mode="Markdown"
@@ -343,7 +355,7 @@ def build_handlers(state: "MarketState", rt: "RuntimeConfig") -> list:
 
         param_map = {
             "threshold_5m": ("scoring_threshold_5m", 1.0, 15.0),
-            "threshold_15m": ("scoring_threshold_15m", 1.0, 15.0),
+            "bias_threshold": ("bias_threshold", 1.0, 10.0),
             "vwap_sensitivity": ("vwap_sensitivity", 1.0, 500.0),
             "poc_sensitivity": ("poc_sensitivity", 1.0, 500.0),
         }
@@ -569,13 +581,11 @@ def build_handlers(state: "MarketState", rt: "RuntimeConfig") -> list:
 
         elif data == "threshold_up":
             rt.scoring_threshold_5m = min(rt.scoring_threshold_5m + 0.5, 13.5)
-            rt.scoring_threshold_15m = min(rt.scoring_threshold_15m + 0.5, 13.5)
             await query.edit_message_text(_format_config(rt), parse_mode="Markdown",
                 reply_markup=config_menu_keyboard())
 
         elif data == "threshold_down":
             rt.scoring_threshold_5m = max(rt.scoring_threshold_5m - 0.5, 1.0)
-            rt.scoring_threshold_15m = max(rt.scoring_threshold_15m - 0.5, 1.0)
             await query.edit_message_text(_format_config(rt), parse_mode="Markdown",
                 reply_markup=config_menu_keyboard())
 

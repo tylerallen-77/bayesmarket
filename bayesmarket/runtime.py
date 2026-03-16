@@ -33,7 +33,7 @@ class RuntimeConfig:
 
     # ── SHADOW TUNING (hot-reload via Telegram /set) ───────────────
     scoring_threshold_5m: float = 7.0
-    scoring_threshold_15m: float = 7.0
+    bias_threshold: float = 3.0       # 4h cascade bias threshold
     vwap_sensitivity: float = 150.0
     poc_sensitivity: float = 150.0
 
