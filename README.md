@@ -1,8 +1,8 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white" />
-  <img src="https://img.shields.io/badge/Hyperliquid-Mainnet-6C5CE7?style=for-the-badge" />
-  <img src="https://img.shields.io/badge/Mode-Shadow-FFA502?style=for-the-badge" />
-  <img src="https://img.shields.io/badge/License-MIT-2ED573?style=for-the-badge" />
+  <img src="https://img.shields.io/badge/Hyperliquid-Mainnet%20%7C%20Testnet-6C5CE7?style=for-the-badge" />
+  <img src="https://img.shields.io/badge/Mode-Shadow%20%7C%20Live-FFA502?style=for-the-badge" />
+  <img src="https://img.shields.io/badge/Deploy-Local%20%7C%20Railway%20%7C%20VPS-2ED573?style=for-the-badge" />
 </p>
 
 <h1 align="center">
@@ -23,47 +23,47 @@
 BayesMarket is an automated perpetual futures trading engine designed for **Hyperliquid BTC-PERP**. It runs in **shadow mode** by default — computing real-time signals from live mainnet data, simulating trades, and logging everything to SQLite — without placing actual orders or requiring any credentials.
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                      LIVE MARKET DATA (MAINNET)                     │
-│                                                                     │
-│  Hyperliquid WebSocket          Binance Futures (Fallback)          │
-│  ├─ l2Book (20 levels)          └─ kline_1m / 5m / 15m / 1h       │
-│  └─ trades (BTC)                                                    │
-│                                                                     │
-│  Synthetic Kline Builder (Primary)                                  │
-│  └─ HL trades → OHLCV candles per TF                               │
-└────────────────────────┬────────────────────────────────────────────┘
-                         │
-        ┌────────────────┼────────────────┐
-        ▼                ▼                ▼
-┌──────────────┐ ┌──────────────┐ ┌──────────────┐ ┌──────────────┐
-│   5m ENGINE  │ │  15m ENGINE  │ │  1h ENGINE   │ │  4h ENGINE   │
-│  (EXECUTION) │ │  (EXECUTION) │ │  (FILTER)    │ │  (FILTER)    │
-│              │ │              │ │              │ │              │
-│ 9 indicators │ │ 9 indicators │ │ VWAP export  │ │ VWAP export  │
-│ Score → ±13.5│ │ Score → ±13.5│ │ (for 5m)     │ │ (for 15m)    │
-└──────┬───────┘ └──────┬───────┘ └──────────────┘ └──────────────┘
-       │                │
-       ▼                ▼
-┌─────────────────────────────────┐
-│       SMART MERGE ENGINE        │
-│                                 │
-│ Same direction → Combined pos.  │
-│ Opposite → 15m wins (higher TF) │
-│ One signal → Single execution   │
-└────────────────┬────────────────┘
-                 ▼
-┌─────────────────────────────────┐
-│        RISK MANAGEMENT          │
-│  2% risk │ 5× lev cap │ 7% DD  │
-│  Funding filter │ Cooldown FSM  │
-└────────────────┬────────────────┘
-                 ▼
-┌─────────────────────────────────┐
-│     SHADOW / LIVE EXECUTION     │
-│  Shadow: simulate at mid_price  │
-│  Live: Limit ALO / Stop Market  │
-└─────────────────────────────────┘
+                        LIVE MARKET DATA
+                             |
+         Hyperliquid WebSocket          Binance Futures (Fallback)
+         +- l2Book (50 levels)          +- kline 1m/5m/15m/1h
+         +- trades (BTC)
+         +- Synthetic Kline Builder (Primary)
+                             |
+        +--------------------+--------------------+
+        v                    v                    v
+  +-----------+  +-----------+  +-----------+  +-----------+
+  |  5m ENGINE|  | 15m ENGINE|  | 1h ENGINE |  | 4h ENGINE |
+  | EXECUTION |  | EXECUTION |  |  FILTER   |  |  FILTER   |
+  | 9 scores  |  | 9 scores  |  | VWAP ref  |  | VWAP ref  |
+  +-----+-----+  +-----+-----+  +-----------+  +-----------+
+        |               |
+        v               v
+  +---------------------------+
+  |     SMART MERGE ENGINE    |     MTF soft penalty/bonus
+  |  Same dir -> combined     |     (not hard veto)
+  |  Conflict -> skip         |
+  +------------+--------------+
+               v
+  +---------------------------+
+  |     RISK MANAGEMENT       |
+  |  2% risk | 5x lev | 7% DD|
+  |  Funding filter | Cooldown|
+  +------------+--------------+
+               v
+  +---------------------------+
+  |  SHADOW / LIVE EXECUTION  |
+  |  Shadow: simulate @ mid   |
+  |  Live: Limit ALO / Stop   |
+  +---------------------------+
+               |
+      +--------+--------+
+      v                  v
+  +--------+    +---------------+
+  |Terminal |    |Telegram Bot   |
+  |Dashboard|    |Control Panel  |
+  |(local)  |    |+ Push Dashboard|
+  +--------+    +---------------+
 ```
 
 ---
@@ -72,15 +72,21 @@ BayesMarket is an automated perpetual futures trading engine designed for **Hype
 
 | Feature | Description |
 |---------|-------------|
-| **Multi-Timeframe** | 4 parallel TFs (5m, 15m execution + 1h, 4h filter) with skip-one VWAP alignment |
+| **Multi-Timeframe** | 4 parallel TFs (5m, 15m execution + 1h, 4h filter) with soft MTF penalty/bonus |
 | **9 Indicators** | CVD, OBI, Depth, VWAP, POC, Heikin Ashi, RSI, MACD, EMA — all proportional, zero binary |
-| **Smart Merge** | Combines 5m+15m signals when aligned; 15m wins on conflict |
-| **3-Layer SL** | Wall (binned $10) → POC → ATR fallback with structural-only tightening |
-| **Dual TP** | TP1 at VWAP reversion (60%), TP2 at 2× ATR (40%) |
-| **Risk Engine** | 2% per trade, 5× leverage cap, cooldown FSM, 7% daily limit |
+| **Smart Merge** | Combines 5m+15m signals when aligned; skips on conflict |
+| **3-Layer SL** | Wall (binned $20) -> POC -> ATR fallback with structural-only tightening |
+| **SL/TP Ratio Guard** | MAX_SL_TP_RATIO=3.0 caps absurd SL from stale POC levels |
+| **Dual TP** | TP1 at VWAP reversion (60%), TP2 at 2x ATR (40%) |
+| **Time-Based Exit** | Auto-close after 30m (5m TF) / 90m (15m TF) if TP1 not hit |
+| **Risk Engine** | 2% per trade, 5x leverage cap, cooldown FSM, 7% daily limit |
 | **Synthetic Klines** | Built from HL trades (zero price divergence), Binance Futures fallback |
 | **Rich Dashboard** | 4-panel live terminal with scores, walls, regime, position tracking |
-| **Full Logging** | Every signal, trade, snapshot → SQLite with CLI report tool |
+| **Telegram Bot** | Full control panel: 15+ commands, inline keyboards, live push dashboard |
+| **Loss Analysis** | Auto-classification of losing trades (7 categories) with recommendations |
+| **Testnet Support** | Single env var swap to switch between mainnet and testnet |
+| **Railway Deploy** | One-click deploy to Railway PaaS (headless, Telegram-only monitoring) |
+| **Full Logging** | Every signal, trade, snapshot -> SQLite with CLI report tool |
 
 ---
 
@@ -118,47 +124,105 @@ python -m bayesmarket
 3. Connects to Binance Futures WebSocket (fallback klines)
 4. Starts synthetic kline builders from HL trades
 5. Computes signals every 1s (execution TFs) / 3-5s (filter TFs)
-6. Renders live 4-panel dashboard
+6. Renders live 4-panel dashboard (local) or push dashboard (Telegram)
 7. Logs everything to `bayesmarket.db`
 
 ---
 
-## Dashboard
+## Telegram Bot
 
-The terminal dashboard shows all 4 timeframes simultaneously with live data:
+BayesMarket includes a full Telegram control panel for remote monitoring and control.
+
+### Setup
+
+1. Create a bot via [@BotFather](https://t.me/BotFather) -> `/newbot`
+2. Get your Chat ID via [@userinfobot](https://t.me/userinfobot)
+3. Set in `.env`:
+   ```
+   TELEGRAM_BOT_TOKEN=your_token
+   TELEGRAM_CHAT_ID=your_chat_id
+   ```
+
+### Commands
+
+| Command | Description |
+|---------|-------------|
+| `/start` | Main menu with inline buttons |
+| `/status` | Full status (position, PnL, risk state) |
+| `/scores` | Live scores for all 4 timeframes |
+| `/report [1d\|7d\|30d\|all]` | Performance report |
+| `/dashboard` | Pull: snapshot now |
+| `/dashboard auto` | Push: live ticker updated every 30s |
+| `/dashboard off` | Stop auto-push |
+| `/analysis [1d\|7d\|30d\|all]` | Loss pattern analysis |
+| `/mode` | View/switch mode |
+| `/live` / `/shadow` | Switch trading mode |
+| `/pause [reason]` / `/resume` | Pause/resume trading |
+| `/close` | Force close open position |
+| `/config` | View active config |
+| `/set <param> <value>` | Hot-reload parameters |
+| `/help` | Command reference |
+
+### Push Dashboard
+
+The push dashboard edits a single Telegram message every 30 seconds with a live ASCII table:
 
 ```
-╔══════════════════════════════╦══════════════════════════════╗
-║  BTC 5m  │ Price: $84,250   ║  BTC 15m │ Price: $84,250   ║
-║  Score: +8.3 ████████░░     ║  Score: +6.1 ██████░░░░     ║
-║  Signal: LONG ✓              ║  Signal: NEUTRAL             ║
-║  MTF (1h): ALIGNED ▲         ║  MTF (4h): ALIGNED ▲         ║
-║──────────────────────────────║──────────────────────────────║
-║  ORDER BOOK                  ║  ORDER BOOK                  ║
-║  OBI: +23.4% BULLISH         ║  OBI: +18.1% BULLISH         ║
-║  Depth: +0.82                ║  Depth: +0.65                ║
-║  Buy Walls: $84,000 (3.2)    ║  Buy Walls: $84,000 (3.2)    ║
-║──────────────────────────────║──────────────────────────────║
-║  FLOW                        ║  FLOW                        ║
-║  CVD Z: +2.1σ (+1.93)        ║  CVD Z: +1.4σ (+1.24)        ║
-║  POC: $84,100                ║  POC: $84,050                ║
-║──────────────────────────────║──────────────────────────────║
-║  TECHNICAL                   ║  TECHNICAL                   ║
-║  RSI(14): 42.3 (+0.38)       ║  RSI(14): 45.1 (+0.25)       ║
-║  MACD: bullish (+0.62)       ║  MACD: bullish (+0.41)       ║
-║  EMA 5>20 (+0.75)            ║  EMA 5>20 (+0.55)            ║
-║  VWAP: above (+1.12)         ║  VWAP: above (+0.83)         ║
-║  HA: ▲ ▲ ▲ ▼ ▲ ▲ ▼ ▲       ║  HA: ▲ ▲ ▼ ▲ ▲ ▲ ▼ ▲       ║
-╠══════════════════════════════╬══════════════════════════════╣
-║  BTC 1h  │ Score: +5.2      ║  BTC 4h  │ Score: +3.8      ║
-║  FILTER TF │ VWAP: $84,120  ║  FILTER TF │ VWAP: $84,050  ║
-╠══════════════════════════════╩══════════════════════════════╣
-║ POSITION: LONG 0.015 BTC @ $84,250 │ SL: $83,800 (wall)   ║
-║ TP1: $84,500 (VWAP) [60%]  TP2: $84,900 (2×ATR) [40%]     ║
-║ PnL: +$22.50 (+0.27%) │ Daily: +$145 (+1.45%)              ║
-║ Risk: NORMAL │ Funding: 0.003%/h (safe) │ Regime: TRENDING  ║
-╚═════════════════════════════════════════════════════════════╝
+METRIC          | VALUE       | STATUS
+----------------|-------------|--------
+PRICE           | $84,250.0   | -
+SCORE 5m        | +8.3 ▓▓▓▓░ | ▲ LONG
+SCORE 15m       | +6.1 ▓▓▓░░ | - NEUTRAL
+POSITION        | LONG        | OPEN
+UNREALIZED      | +$22.50     | +0.27%
+RISK STATE      | NORMAL      | W:3 L:0
 ```
+
+---
+
+## Deployment
+
+BayesMarket supports three deployment modes, switchable via env vars:
+
+| Mode | `DEPLOYMENT_ENV` | Dashboard | Monitoring |
+|------|-----------------|-----------|------------|
+| **Local** | `local` | Rich terminal | Terminal + Telegram |
+| **Railway** | `railway` | Disabled (no TTY) | Telegram only |
+| **VPS** | `vps` | Rich terminal | Terminal + Telegram |
+
+### Railway (PaaS)
+
+```bash
+# Files included: Procfile, railway.toml, nixpacks.toml
+# Set variables in Railway Dashboard -> Service -> Variables
+# Mount volume at /app/data for persistent SQLite
+```
+
+See `.env.railway` for the full variable template.
+
+### VPS (Contabo/Oracle)
+
+```bash
+cd bayesmarket/deploy
+chmod +x setup.sh
+./setup.sh
+```
+
+See `bayesmarket/deploy/VPS_GUIDE.md` for detailed instructions.
+
+### Testnet
+
+Switch to Hyperliquid testnet with env vars only — no code changes:
+
+```bash
+LIVE_MODE=true
+HL_REST_URL=https://api.hyperliquid-testnet.xyz
+HL_WS_URL=wss://api.hyperliquid-testnet.xyz/ws
+HL_PRIVATE_KEY=<testnet API wallet key>
+HL_ACCOUNT_ADDRESS=<testnet main wallet address>
+```
+
+See `.env.testnet` for the full template. Get mock USDC at https://app.hyperliquid-testnet.xyz/drip
 
 ---
 
@@ -166,67 +230,69 @@ The terminal dashboard shows all 4 timeframes simultaneously with live data:
 
 All indicators output **proportional scores** — no binary signals. The composite score ranges from **-13.5 to +13.5**.
 
-### Category A: Order Flow (Leading) — max ±6.0
+### Category A: Order Flow (Leading) — max +/-6.0
 
 | Indicator | Formula | Range |
 |-----------|---------|-------|
-| **CVD** | `z = (cvd - mean) / std` → `2.0 × tanh(z / 2.0)` | ±2.0 |
-| **OBI** | `((bid_vol - ask_vol) / total) × 2.0` | ±2.0 |
-| **Depth** | `((bid_depth - ask_depth) / total) × 2.0` | ±2.0 |
+| **CVD** | `z = (cvd - mean) / std` -> `2.0 * tanh(z / 2.0)` | +/-2.0 |
+| **OBI** | `((bid_vol - ask_vol) / total) * 2.0` | +/-2.0 |
+| **Depth** | `((bid_depth - ask_depth) / total) * 2.0` | +/-2.0 |
 
-### Category B: Structure (Equilibrium) — max ±4.5
-
-| Indicator | Formula | Range |
-|-----------|---------|-------|
-| **VWAP** | `clamp((price - vwap) / vwap × 150, -1.5, +1.5)` | ±1.5 |
-| **POC** | `clamp((price - poc) / poc × 150, -1.5, +1.5)` | ±1.5 |
-| **Heikin Ashi** | `(streak / 3) × 1.5` where streak ∈ [-3, +3] | ±1.5 |
-
-### Category C: Momentum (Lagging) — max ±3.0
+### Category B: Structure (Equilibrium) — max +/-4.5
 
 | Indicator | Formula | Range |
 |-----------|---------|-------|
-| **RSI** | Linear: 30→+1, 50→0, 70→-1 | ±1.0 |
-| **MACD** | `clamp(histogram / ATR, -1.0, +1.0)` | ±1.0 |
-| **EMA** | `clamp((ema5 - ema20) / ema20 × 200, -1.0, +1.0)` | ±1.0 |
+| **VWAP** | `clamp((price - vwap) / vwap * 20, -1.5, +1.5)` | +/-1.5 |
+| **POC** | `clamp((price - poc) / poc * 20, -1.5, +1.5)` | +/-1.5 |
+| **Heikin Ashi** | `(streak / 5) * 1.5` where streak in [-5, +5] | +/-1.5 |
+
+### Category C: Momentum (Lagging) — max +/-3.0
+
+| Indicator | Formula | Range |
+|-----------|---------|-------|
+| **RSI** | Linear: 30->+1, 50->0, 70->-1 | +/-1.0 |
+| **MACD** | `clamp(histogram / ATR, -1.0, +1.0)` | +/-1.0 |
+| **EMA** | `clamp((ema5 - ema20) / ema20 * 200, -1.0, +1.0)` | +/-1.0 |
 
 ### Signal Thresholds
 
 | Regime | Threshold | Action |
 |--------|-----------|--------|
-| Trending | ±7.0 | Generate LONG/SHORT signal |
-| Ranging | ±8.5 (15m) / ±9.0 (5m) | Higher bar = fewer false signals |
+| Trending | +/-7.0 | Generate LONG/SHORT signal |
+| Ranging | +/-8.5 (15m) / +/-9.0 (5m) | Higher bar = fewer false signals |
 
 ---
 
 ## Signal Flow
 
 ```
-Score ≥ +7.0 (trending)
-    │
-    ▼
-MTF Filter: price > 1h VWAP? ──── No ──→ BLOCKED (mtf_misaligned)
-    │ Yes
-    ▼
-Funding Filter: danger tier against? ── Yes ──→ BLOCKED (funding_danger)
-    │ No
-    ▼
-Risk Check: cooldown? daily limit? ──── Yes ──→ BLOCKED
-    │ No
-    ▼
-Position open? ──── Yes ──→ BLOCKED (unless merge eligible)
-    │ No
-    ▼
+Score >= +7.0 (trending)
+    |
+    v
+MTF Filter: price > 1h VWAP?
+    |-- Aligned:   score += 1.5 bonus
+    |-- Misaligned: score *= 0.7 penalty
+    |-- Strong oppose (>= 3.5): BLOCKED
+    v
+Funding Filter: danger tier against? --- Yes --> BLOCKED
+    | No
+    v
+Risk Check: cooldown? daily limit? ---- Yes --> BLOCKED
+    | No
+    v
+Position open? --- Yes --> BLOCKED (unless merge eligible)
+    | No
+    v
 SMART MERGE with other execution TF
-    │
-    ▼
-SL DETERMINATION: Wall → POC → ATR (3-layer fallback)
-    │
-    ▼
-POSITION SIZING: 2% risk, 5× leverage cap
-    │
-    ▼
-EXECUTE (shadow: simulate │ live: limit ALO)
+    |
+    v
+SL DETERMINATION: Wall -> POC -> ATR (3-layer fallback)
+    |-- SL/TP ratio > 3.0? Cap SL distance
+    v
+POSITION SIZING: 2% risk, 5x leverage cap
+    |
+    v
+EXECUTE (shadow: simulate | live: limit ALO)
 ```
 
 ---
@@ -236,39 +302,57 @@ EXECUTE (shadow: simulate │ live: limit ALO)
 ### Position Sizing
 
 ```python
-risk_amount = capital × 2%                    # $20 on $1,000
+risk_amount = capital * 2%                    # $20 on $1,000
 sl_distance = abs(entry - sl)                 # e.g., $450
 size = risk_amount / sl_distance              # e.g., 0.044 BTC
 
 # Modifiers applied in order:
-if cooldown:  size × 0.5                      # Half size during cooldown
-if funding_caution: size × 0.75               # Reduced in caution tier
-if merged: size × 2.0                         # Double for merged signals
+if cooldown:  size *= 0.5                     # Half size during cooldown
+if funding_caution: size *= 0.75              # Reduced in caution tier
+if merged: size *= 2.0                        # Double for merged signals
 
 # ALWAYS capped:
-final = min(size, capital × MAX_LEVERAGE / price)  # 5× leverage cap
+final = min(size, capital * MAX_LEVERAGE / price)  # 5x leverage cap
 ```
 
 ### Cooldown State Machine
 
 ```
-NORMAL ──[3 consecutive losses]──→ COOLDOWN (50% size)
-   ▲                                    │
-   │                                    │
-   ├──[2 wins]──────────────────────────┘
-   ├──[1 hour elapsed]─────────────────┘
-   │                                    │
-   │                              [3 more losses]
-   │                                    │
-   │                                    ▼
-   └──[4h elapsed]───────────── FULL STOP (no trading)
+NORMAL --[3 consecutive losses]--> COOLDOWN (50% size)
+   ^                                    |
+   |--[2 wins]-------------------------+
+   |--[1 hour elapsed]----------------+
+   |                              [3 more losses]
+   |                                    |
+   |                                    v
+   +--[4h elapsed]------------- FULL STOP (no trading)
 ```
 
 ### Daily Protection
 
-- **7% daily loss limit** → 12-hour pause
+- **7% daily loss limit** -> 12-hour pause
 - **Resets at 00:00 UTC** daily
 - **Capital auto-compounds** in shadow mode
+
+---
+
+## Loss Trade Analysis
+
+When a trade closes with a loss, BayesMarket automatically classifies the failure into one of 7 categories:
+
+| Category | Severity | Description |
+|----------|----------|-------------|
+| `stale_poc_sl` | Critical | SL based on POC >1% away from entry |
+| `poor_rr_entry` | Critical | Risk/reward ratio < 0.5 at entry |
+| `time_overheld` | Critical | Held >2x the time exit limit |
+| `trend_reversal` | Moderate | Score flipped direction during hold |
+| `choppy_market` | Moderate | Borderline entry score in ranging market |
+| `mtf_misaligned_entry` | Moderate | Filter TF was opposing at entry |
+| `normal_sl` | Minor | Clean SL, no anomaly detected |
+
+Diagnosis is stored in the `trades` table and surfaced via:
+- Telegram `/analysis` command (pattern summary by period)
+- Rich loss alerts with per-trade diagnostics and recommendations
 
 ---
 
@@ -280,9 +364,10 @@ BayesMarket uses **structural SL management** — no wall chasing after entry.
 
 | Priority | Source | Method |
 |----------|--------|--------|
-| 1st | **Wall** | Nearest valid bid/ask wall (binned $10, survived 5s) + 0.05% offset |
+| 1st | **Wall** | Nearest valid bid/ask wall (binned $20, survived 3s) + 0.05% offset |
 | 2nd | **POC** | Volume Profile point of control + 0.1% offset |
-| 3rd | **ATR** | 1.5× ATR(14) from entry price |
+| 3rd | **ATR** | 1.5x ATR(14) from entry price |
+| Guard | **Ratio** | If SL > 3x TP1 distance, cap SL |
 | Emergency | **Pct** | 3% max distance cap |
 
 ### After Entry (Structural Only)
@@ -290,7 +375,7 @@ BayesMarket uses **structural SL management** — no wall chasing after entry.
 - **NEVER** tightens because a new wall appeared after entry
 - **ONLY** tightens on confirmed structural swing low/high shift (0.3% confirmation)
 - **ONLY** escalates fallback when the ORIGINAL basis wall decays (< 25%)
-- **Minimum distance**: 0.3 × ATR from current price
+- **Minimum distance**: 0.3 x ATR from current price
 
 ---
 
@@ -299,7 +384,8 @@ BayesMarket uses **structural SL management** — no wall chasing after entry.
 ```
 bayesmarket/
 ├── config.py              # All configurable constants and parameters
-├── main.py                # Entry point — async orchestration (14 tasks)
+├── main.py                # Entry point — async orchestration (15 tasks)
+├── runtime.py             # Mutable RuntimeConfig (hot-reload via Telegram)
 ├── __main__.py            # python -m bayesmarket support
 │
 ├── feeds/
@@ -312,32 +398,79 @@ bayesmarket/
 │   ├── structure.py       # VWAP, POC (Volume Profile), Heikin Ashi
 │   ├── momentum.py        # RSI, MACD, EMA — all proportional
 │   ├── regime.py          # ATR(14), regime detection (trending/ranging)
-│   └── scoring.py         # Composite score + signal generation
+│   └── scoring.py         # Composite score + signal generation + MTF filter
 │
 ├── engine/
 │   ├── timeframe.py       # TimeframeEngine — one instance per TF
-│   ├── merge.py           # Smart merge: 4 conflict resolution cases
-│   ├── executor.py        # Entry/exit pipeline, SL/TP management
-│   └── position.py        # Position state tracking, partial exits
+│   ├── merge.py           # Smart merge: 5 conflict resolution cases
+│   ├── executor.py        # Entry/exit pipeline, SL/TP, time exit, loss analysis
+│   ├── position.py        # Position state tracking, partial exits
+│   └── loss_analyzer.py   # Auto-classify losing trades (7 categories)
 │
 ├── risk/
-│   ├── sizing.py          # Position sizing (2% rule + 5× leverage cap)
+│   ├── sizing.py          # Position sizing (2% rule + 5x leverage cap)
 │   ├── limits.py          # Daily loss limit, cooldown, circuit breakers
 │   └── funding.py         # Funding rate fetch + 3-tier filter
 │
 ├── data/
 │   ├── state.py           # MarketState, TimeframeState, SignalSnapshot, etc.
-│   ├── storage.py         # SQLite interface — 4 tables
+│   ├── storage.py         # SQLite interface — 4 tables + v3 migration
 │   └── recorder.py        # Market snapshot recorder (every 10s)
 │
 ├── dashboard/
 │   └── terminal.py        # Rich 4-panel split screen terminal
 │
+├── telegram_bot/
+│   ├── bot.py             # Bot setup, polling loop, push dashboard init
+│   ├── handlers.py        # 15 command handlers + callback handler
+│   ├── alerts.py          # Outbound alerts (entry, exit, TP1, risk, loss)
+│   ├── keyboards.py       # Inline keyboard layouts
+│   └── dashboard_push.py  # Live ASCII dashboard (edit message every 30s)
+│
+├── deploy/
+│   ├── setup.sh           # VPS setup script
+│   ├── bayesmarket.service # systemd unit file
+│   └── VPS_GUIDE.md       # Deployment guide
+│
 ├── report.py              # CLI performance report tool
 ├── requirements.txt
-├── .env.example
-└── CHANGELOG.md           # Improvement log during shadow mode
+├── .env.example           # Full env var template
+├── .env.testnet           # Testnet configuration template
+├── .env.railway           # Railway environment template
+├── Procfile               # Railway/Heroku worker process
+├── railway.toml           # Railway deploy configuration
+├── nixpacks.toml          # Nixpacks build configuration
+└── CHANGELOG.md           # Improvement log
 ```
+
+---
+
+## Configuration
+
+All parameters are in `bayesmarket/config.py`. Key settings:
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `LIVE_MODE` | `False` | Shadow mode (no orders, no credentials) |
+| `SIMULATED_CAPITAL` | `$1,000` | Starting capital for simulation |
+| `MAX_LEVERAGE` | `5x` | Hard cap on leverage |
+| `MAX_RISK_PER_TRADE` | `2%` | Maximum risk per trade |
+| `DAILY_LOSS_LIMIT` | `7%` | Daily drawdown circuit breaker |
+| `MAX_SL_TP_RATIO` | `3.0` | SL/TP distance ratio cap |
+| `WALL_BIN_SIZE` | `$20` | Price binning for wall detection |
+| `WALL_PERSISTENCE_SECONDS` | `3s` | Minimum wall age for SL basis |
+| `KLINE_SOURCE` | `synthetic` | Primary: HL trades, fallback: Binance Futures |
+| `IS_TESTNET` | Auto-detect | `true` if HL_REST_URL contains "testnet" |
+| `DEPLOYMENT_ENV` | `local` | `local` / `railway` / `vps` |
+
+### Runtime Hot-Reload (via Telegram `/set`)
+
+| Parameter | Range | Default |
+|-----------|-------|---------|
+| `threshold_5m` | 1.0 - 15.0 | 7.0 |
+| `threshold_15m` | 1.0 - 15.0 | 7.0 |
+| `vwap_sensitivity` | 1.0 - 500.0 | 150.0 |
+| `poc_sensitivity` | 1.0 - 500.0 | 150.0 |
 
 ---
 
@@ -357,50 +490,6 @@ python -m bayesmarket.report --period all --detail
 python -m bayesmarket.report --signals
 ```
 
-**Example output:**
-
-```
-══════════════════════════════════════════════════════
-BAYESMARKET PERFORMANCE REPORT — 7D
-══════════════════════════════════════════════════════
-
-SUMMARY
-  Total trades:        47
-  Win rate:            55.3% (26W / 21L)
-  Profit factor:       1.42
-  Net PnL:             +$82.30
-  Avg PnL per trade:   +$1.75
-  Avg duration:        14m 22s
-
-BY SOURCE
-  single_5m        22 trades | 50% WR | +$18.40
-  single_15m       18 trades | 61% WR | +$52.90
-  merged            7 trades | 57% WR | +$11.00
-
-BY EXIT REASON
-  tp1_hit          31 (66%)
-  tp2_hit          12 (26%)
-  sl_hit            4 (8%)
-══════════════════════════════════════════════════════
-```
-
----
-
-## Configuration
-
-All parameters are in `bayesmarket/config.py`. Key settings:
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `LIVE_MODE` | `False` | Shadow mode (no orders, no credentials) |
-| `SIMULATED_CAPITAL` | `$1,000` | Starting capital for simulation |
-| `MAX_LEVERAGE` | `5×` | Hard cap on leverage |
-| `MAX_RISK_PER_TRADE` | `2%` | Maximum risk per trade |
-| `DAILY_LOSS_LIMIT` | `7%` | Daily drawdown circuit breaker |
-| `WALL_BIN_SIZE` | `$10` | Price binning for wall detection |
-| `WALL_PERSISTENCE_SECONDS` | `5s` | Minimum wall age for SL basis |
-| `KLINE_SOURCE` | `synthetic` | Primary: HL trades, fallback: Binance Futures |
-
 ---
 
 ## Shadow Mode Validation
@@ -416,20 +505,21 @@ After running for 10+ minutes, verify:
 - [ ] `python -m bayesmarket.report` outputs stats
 - [ ] No errors in terminal output
 - [ ] Memory stable (not growing unbounded)
+- [ ] Telegram bot responds to `/status` (if configured)
 
 ---
 
 ## Going Live
 
-> **Shadow mode must pass all 3 validation phases before considering live.**
-> See `CHANGELOG.md` for the improvement protocol.
+> **Shadow mode must pass all validation phases before considering live.**
 
-1. Complete 21-day shadow validation (stability → signal quality → risk)
-2. Create API wallet at `app.hyperliquid.xyz/API`
-3. Fill `.env` with credentials
-4. Set `LIVE_MODE = True` in `config.py`
-5. Start with small capital ($200-300)
-6. Monitor first trades manually in Hyperliquid UI
+1. Run shadow mode for 21+ days (stability -> signal quality -> risk)
+2. Switch to **testnet** first — validate with mock USDC
+3. Create API wallet at `app.hyperliquid.xyz/API`
+4. Fill `.env` with credentials
+5. Set `LIVE_MODE=true` via `.env` or Telegram `/live`
+6. Start with small capital ($200-300)
+7. Monitor first trades via Telegram alerts
 
 ---
 
@@ -441,9 +531,11 @@ After running for 10+ minutes, verify:
 | Async | `asyncio` + `websockets` + `aiohttp` |
 | Data | NumPy, SQLite (WAL mode) |
 | Dashboard | Rich (terminal UI) |
-| Logging | structlog (structured JSON-compatible) |
-| Exchange | Hyperliquid (mainnet public feeds) |
+| Telegram | python-telegram-bot 21+ |
+| Logging | structlog (structured, color-aware) |
+| Exchange | Hyperliquid (mainnet + testnet) |
 | Fallback | Binance Futures (klines only) |
+| Deploy | Railway / VPS / Local |
 
 ---
 
@@ -451,7 +543,6 @@ After running for 10+ minutes, verify:
 
 - **Not a backtesting engine** — real-time signals on live data only
 - **Not multi-asset** — BTC-PERP only for MVP
-- **Not a web app** — terminal dashboard only
 - **Not HFT** — accuracy over speed, rejects ~85% of signals
 - **Not financial advice** — use at your own risk
 
