@@ -48,22 +48,28 @@ async def hl_book_feed(state: MarketState) -> None:
                             "type": "l2Book",
                             "coin": config.COIN,
                             "nSigFigs": config.HL_L2_SIG_FIGS,
-                            "mantissa": config.HL_L2_BOOK_LEVELS,
                         },
                     })
                     await ws.send_str(sub_msg)
-                    logger.info("hl_book_feed_connected", levels=config.HL_L2_BOOK_LEVELS)
+                    logger.info("hl_book_feed_connected", nSigFigs=config.HL_L2_SIG_FIGS)
                     backoff = 1
 
+                    msg_count = 0
                     async for raw_msg in ws:
                         if raw_msg.type == aiohttp.WSMsgType.TEXT:
                             try:
                                 msg = json.loads(raw_msg.data)
                                 _process_l2book(msg, state)
+                                msg_count += 1
                             except Exception as exc:
                                 logger.error("l2book_parse_failed", error=str(exc))
                         elif raw_msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
+                            logger.warning("hl_book_ws_closed", type=str(raw_msg.type), msgs_received=msg_count)
                             break
+
+                    # Loop exited normally (server closed connection)
+                    if msg_count == 0:
+                        logger.warning("hl_book_feed_zero_messages", hint="subscription may be rejected")
 
         except (aiohttp.WSServerHandshakeError, aiohttp.ClientError, OSError) as exc:
             logger.warning("hl_book_feed_disconnected", error=str(exc), backoff=backoff)
