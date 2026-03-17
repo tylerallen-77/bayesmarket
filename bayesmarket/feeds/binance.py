@@ -137,7 +137,13 @@ async def binance_kline_feed(state: MarketState) -> None:
     backoff = 1
     while True:
         try:
-            async with websockets.connect(ws_url, ssl=_create_ssl_context()) as ws:
+            async with websockets.connect(
+                ws_url,
+                ssl=_create_ssl_context(),
+                ping_interval=20,
+                ping_timeout=10,
+                close_timeout=5,
+            ) as ws:
                 logger.info("binance_kline_feed_connected")
                 backoff = 1
 

@@ -9,9 +9,11 @@ Fixes:
 import asyncio
 import json
 import math
+import ssl
 import time
 from typing import Optional
 
+import certifi
 import structlog
 import websockets
 
@@ -21,12 +23,23 @@ from bayesmarket.data.state import BookLevel, MarketState, TradeEvent, WallInfo
 logger = structlog.get_logger()
 
 
+def _create_ssl_context() -> ssl.SSLContext:
+    """Create SSL context using certifi CA bundle."""
+    return ssl.create_default_context(cafile=certifi.where())
+
+
 async def hl_book_feed(state: MarketState) -> None:
     """Subscribe to Hyperliquid l2Book and update state + wall tracker."""
     backoff = 1
     while True:
         try:
-            async with websockets.connect(config.HL_WS_URL) as ws:
+            async with websockets.connect(
+                config.HL_WS_URL,
+                ssl=_create_ssl_context(),
+                ping_interval=20,
+                ping_timeout=10,
+                close_timeout=5,
+            ) as ws:
                 sub_msg = json.dumps({
                     "method": "subscribe",
                     "subscription": {
@@ -185,7 +198,13 @@ async def hl_trade_feed(state: MarketState) -> None:
     backoff = 1
     while True:
         try:
-            async with websockets.connect(config.HL_WS_URL) as ws:
+            async with websockets.connect(
+                config.HL_WS_URL,
+                ssl=_create_ssl_context(),
+                ping_interval=20,
+                ping_timeout=10,
+                close_timeout=5,
+            ) as ws:
                 sub_msg = json.dumps({
                     "method": "subscribe",
                     "subscription": {"type": "trades", "coin": config.COIN},
