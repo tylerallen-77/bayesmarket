@@ -11,6 +11,7 @@ Tasks:
 - 3 background (funding, daily reset, snapshot recorder)
 - 1 Telegram bot (control panel + push dashboard)
 - 1 terminal dashboard (disabled on Railway)
+- 1 web dashboard (enabled on Railway or WEB_DASHBOARD=true)
 """
 
 import asyncio
@@ -25,6 +26,7 @@ from bayesmarket.data.recorder import snapshot_recorder
 from bayesmarket.data.state import MarketState, TimeframeState
 from bayesmarket.data.storage import Storage
 from bayesmarket.dashboard.terminal import dashboard_loop
+from bayesmarket.dashboard.web import web_dashboard_loop
 from bayesmarket.engine.executor import merge_and_execute_loop, position_monitor_loop
 from bayesmarket.engine.reconcile import reconcile_positions
 from bayesmarket.engine.timeframe import TimeframeEngine
@@ -140,8 +142,10 @@ async def main(startup_cfg: StartupConfig | None = None) -> None:
         telegram_bot_loop(state, rt),
 
         # Terminal dashboard — disabled on Railway (no TTY)
-        # Monitoring via Telegram instead when IS_RAILWAY=True
         *([dashboard_loop(state)] if not config.IS_RAILWAY else []),
+
+        # Web dashboard — enabled on Railway or via WEB_DASHBOARD=true
+        *([web_dashboard_loop(state, storage)] if config.WEB_DASHBOARD else []),
     ]
 
     logger.info("all_tasks_launching", count=len(tasks))

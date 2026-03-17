@@ -78,13 +78,13 @@ BayesMarket is an automated perpetual futures trading engine designed for **Hype
     │                Live: Limit ALO entry │ Stop Market SL   │
     └────────────────────────┬────────────────────────────────┘
                              │
-                   ┌─────────┴─────────┐
-                   ▼                   ▼
-            ┌────────────┐    ┌──────────────┐
-            │  Terminal   │    │  Telegram     │
-            │  Dashboard  │    │  Control      │
-            │  (local)    │    │  Panel        │
-            └────────────┘    └──────────────┘
+                   ┌─────────┼─────────┐
+                   ▼         ▼         ▼
+            ┌──────────┐ ┌────────┐ ┌──────────┐
+            │ Terminal  │ │  Web   │ │ Telegram │
+            │ Dashboard │ │ Dash   │ │ Control  │
+            │ (local)   │ │(Railway│ │  Panel   │
+            └──────────┘ └────────┘ └──────────┘
 ```
 
 </div>
@@ -119,7 +119,8 @@ BayesMarket is an automated perpetual futures trading engine designed for **Hype
 <td width="50%">
 
 ### Monitoring & Analysis
-- **Rich Terminal** — 4-panel live dashboard
+- **Rich Terminal** — 4-panel live dashboard (local/VPS)
+- **Web Dashboard** — browser-based SSE dashboard with equity curve
 - **Telegram Bot** — 16+ commands, inline keyboards
 - **Loss Analysis** — 7-category auto-classification
 - **Correlation Tracker** — pairwise indicator independence tracking
@@ -408,8 +409,10 @@ RISK STATE      | NORMAL      | W:3 L:0
 | Mode | `DEPLOYMENT_ENV` | Dashboard | Monitoring | Wizard |
 |:-----|:-----------------|:----------|:-----------|:-------|
 | **Local** | `local` | Rich terminal | Terminal + Telegram | Terminal prompts |
-| **Railway** | `railway` | Disabled | Telegram only | `/setup` command |
-| **VPS** | `vps` | Rich terminal | Terminal + Telegram | Terminal prompts |
+| **Railway** | `railway` | Web dashboard (auto) | Web + Telegram | `/setup` command |
+| **VPS** | `vps` | Rich terminal (+ web opt-in) | Terminal + Telegram | Terminal prompts |
+
+> **Web Dashboard:** On Railway, a browser-based dashboard is served automatically on the `PORT` assigned by Railway. On local/VPS, enable it with `WEB_DASHBOARD=true` in `.env`. Access at `http://localhost:8080` (or your Railway public URL).
 
 ### Deploy to Railway (Recommended for 24/7)
 
@@ -480,15 +483,31 @@ Without a volume, SQLite data is lost on every redeploy.
 
 This stores `bayesmarket.db` persistently at `/app/data/bayesmarket.db`.
 
-#### Step 5: Deploy & Verify
+#### Step 5: Enable Public URL (Web Dashboard)
+
+```
+1. Railway Dashboard → your service → "Settings" tab
+2. Under "Networking" → click "Generate Domain"
+3. Railway assigns a public URL like: bayesmarket-production-xxxx.up.railway.app
+4. Open that URL in your browser → live web dashboard with real-time updates
+5. The dashboard auto-refreshes every 3 seconds via SSE (Server-Sent Events)
+```
+
+> The web dashboard has 3 tabs:
+> - **Dashboard** — live 4-panel scores (SSE, 3s auto-refresh), position, risk state, cascade info
+> - **Config** — read-only deployment status (shadow/testnet/live), scoring, risk, TP strategy
+> - **Trades** — equity curve chart, summary stats, recent trade history table
+
+#### Step 6: Deploy & Verify
 
 ```
 1. Railway auto-deploys on push. Check "Deployments" tab for build logs.
-2. Once running, open Telegram → send /start to your bot
-3. Bot should reply with the main menu
-4. Send /status to verify it's connected to Hyperliquid
-5. Send /scores to see live cascade scores
-6. Send /dashboard auto to enable live push updates every 30s
+2. Once running, open your Railway public URL → web dashboard should load
+3. Open Telegram → send /start to your bot
+4. Bot should reply with the main menu
+5. Send /status to verify it's connected to Hyperliquid
+6. Send /scores to see live cascade scores
+7. Send /dashboard auto to enable Telegram push updates every 30s
 ```
 
 #### Railway Telegram Commands Cheatsheet
@@ -692,7 +711,8 @@ bayesmarket/
 │   └── recorder.py        # Market snapshot recorder (every 10s)
 │
 ├── dashboard/
-│   └── terminal.py        # Rich 4-panel split screen terminal
+│   ├── terminal.py        # Rich 4-panel split screen terminal
+│   └── web.py             # Browser dashboard (SSE, aiohttp) for Railway
 │
 ├── telegram_bot/
 │   ├── bot.py             # Bot setup, polling loop, push dashboard
@@ -794,7 +814,7 @@ After running 10+ minutes in shadow mode:
 | Language | Python 3.11+ |
 | Async | `asyncio` + `websockets` + `aiohttp` |
 | Data | NumPy, SQLite (WAL mode) |
-| Dashboard | Rich (terminal UI) |
+| Dashboard | Rich (terminal) + aiohttp SSE + Chart.js (web) |
 | Telegram | python-telegram-bot 21+ |
 | Logging | structlog (structured, color-aware) |
 | Exchange | Hyperliquid (mainnet + testnet) |

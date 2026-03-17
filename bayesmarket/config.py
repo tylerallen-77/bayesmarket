@@ -282,6 +282,8 @@ TP_PARTIAL_FILL_ESCALATION = "ioc"
 # DASHBOARD
 # ══════════════════════════════════════════════════════════════════
 DASHBOARD_REFRESH_SECONDS = 3.0
+WEB_DASHBOARD = os.getenv("WEB_DASHBOARD", "false").lower() == "true" or IS_RAILWAY
+WEB_DASHBOARD_PORT = int(os.getenv("PORT", "8080"))
 
 # ══════════════════════════════════════════════════════════════════
 # DATABASE
