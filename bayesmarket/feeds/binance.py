@@ -228,8 +228,17 @@ def check_fallback_status(state: MarketState) -> None:
             logger.info("fallback_recovered", tf=tf_name)
 
 
+_ws_alert_last: dict[str, float] = {}
+_WS_ALERT_COOLDOWN = 300  # max 1 alert per feed per 5 minutes
+
+
 async def _ws_disconnect_alert(feed_name: str, error: str) -> None:
-    """Send Telegram alert on WebSocket disconnect (MOD-3)."""
+    """Send Telegram alert on WebSocket disconnect (rate-limited)."""
+    now = time.time()
+    last = _ws_alert_last.get(feed_name, 0)
+    if now - last < _WS_ALERT_COOLDOWN:
+        return
+    _ws_alert_last[feed_name] = now
     try:
         from bayesmarket.telegram_bot.alerts import send_alert
         msg = f"⚠️ *WS DISCONNECTED — {feed_name}*\n`{error[:100]}`\nReconnecting..."
