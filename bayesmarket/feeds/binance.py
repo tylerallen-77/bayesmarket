@@ -6,10 +6,12 @@ when Hyperliquid trades go stale.
 
 import asyncio
 import json
+import ssl
 import time
 from collections import deque
 
 import aiohttp
+import certifi
 import structlog
 import websockets
 
@@ -27,8 +29,21 @@ TF_TO_BINANCE_INTERVAL = {
 }
 
 
+def _create_ssl_context() -> ssl.SSLContext:
+    """Create SSL context using certifi CA bundle."""
+    ctx = ssl.create_default_context(cafile=certifi.where())
+    return ctx
+
+
 async def bootstrap_klines(state: MarketState) -> None:
-    """Fetch initial kline history from Binance Futures REST for all TFs."""
+    """Fetch initial kline history from Binance Futures REST for all TFs.
+
+    Gracefully handles Binance being unreachable (e.g., corporate network).
+    Synthetic klines from HL trades will fill in once trading data arrives.
+    """
+    ssl_ctx = _create_ssl_context()
+    loaded = 0
+
     async with aiohttp.ClientSession() as session:
         for tf_name, tf_state in state.tf_states.items():
             tf_cfg = config.TIMEFRAMES[tf_name]
@@ -43,7 +58,7 @@ async def bootstrap_klines(state: MarketState) -> None:
 
             for attempt in range(3):
                 try:
-                    async with session.get(url, params=params, ssl=False) as resp:
+                    async with session.get(url, params=params, ssl=ssl_ctx, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                         if resp.status != 200:
                             logger.warning(
                                 "bootstrap_klines_http_error",
@@ -51,12 +66,13 @@ async def bootstrap_klines(state: MarketState) -> None:
                                 status=resp.status,
                                 attempt=attempt + 1,
                             )
-                            await asyncio.sleep(5)
+                            await asyncio.sleep(2)
                             continue
 
                         data = await resp.json()
                         candles = _parse_rest_klines(data)
                         tf_state.klines = deque(candles, maxlen=tf_cfg["kline_max"])
+                        loaded += 1
                         logger.info(
                             "bootstrap_klines_loaded",
                             tf=tf_name,
@@ -73,9 +89,20 @@ async def bootstrap_klines(state: MarketState) -> None:
                         attempt=attempt + 1,
                     )
                     if attempt < 2:
-                        await asyncio.sleep(5)
+                        await asyncio.sleep(2)
                     else:
-                        logger.error("bootstrap_klines_exhausted", tf=tf_name)
+                        logger.warning(
+                            "bootstrap_klines_skipped",
+                            tf=tf_name,
+                            reason="Binance unreachable — synthetic klines will populate from HL trades",
+                        )
+
+    if loaded == 0:
+        logger.warning(
+            "bootstrap_klines_all_failed",
+            reason="Binance completely unreachable. System will start with empty klines. "
+                   "Indicators will activate once synthetic klines build up from HL trade stream.",
+        )
 
 
 def _parse_rest_klines(data: list) -> list[Candle]:
@@ -110,7 +137,7 @@ async def binance_kline_feed(state: MarketState) -> None:
     backoff = 1
     while True:
         try:
-            async with websockets.connect(ws_url) as ws:
+            async with websockets.connect(ws_url, ssl=_create_ssl_context()) as ws:
                 logger.info("binance_kline_feed_connected")
                 backoff = 1
 

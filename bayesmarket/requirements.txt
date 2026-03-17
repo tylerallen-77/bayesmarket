@@ -12,6 +12,9 @@ numpy>=1.26.0
 # Terminal dashboard
 rich>=14.0.0
 
+# SSL certificates
+certifi>=2024.0.0
+
 # Environment variables
 python-dotenv>=1.0.0
 
