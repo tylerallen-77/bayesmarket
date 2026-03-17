@@ -193,18 +193,30 @@ def _format_report(db_path, period: str) -> str:
 
 
 def _format_config(rt: "RuntimeConfig") -> str:
+    trailing_label = "ON ✅" if rt.trailing_stop_enabled else "OFF ❌"
+    adaptive_label = "ON ✅" if rt.tp_regime_adaptive else "OFF ❌"
     lines = [
         f"⚙️ *CONFIG AKTIF*",
         f"━━━━━━━━━━━━━━━━━━━━",
         f"Mode:          `{rt.mode_label}`",
         f"Status:        `{rt.status_label}`",
         f"",
-        f"*Scoring Thresholds:*",
-        f"  5m (trigger):  `{rt.scoring_threshold_5m}`",
+        f"*Scoring:*",
+        f"  Threshold 5m:  `{rt.scoring_threshold_5m}`",
+        f"  Bias 4h:       `{rt.bias_threshold}`",
+        f"  VWAP sens:     `{rt.vwap_sensitivity}`",
+        f"  POC sens:      `{rt.poc_sensitivity}`",
         f"",
-        f"*Sensitivities:*",
-        f"  VWAP: `{rt.vwap_sensitivity}`",
-        f"  POC:  `{rt.poc_sensitivity}`",
+        f"*Risk:*",
+        f"  Risk/trade:    `{rt.max_risk_per_trade*100:.1f}%`",
+        f"  Max leverage:  `{rt.max_leverage:.1f}x`",
+        f"  Daily limit:   `{rt.daily_loss_limit*100:.1f}%`",
+        f"",
+        f"*TP Strategy:*",
+        f"  TP1 size:      `{rt.tp1_size_pct*100:.0f}%`",
+        f"  Trailing stop: `{trailing_label}`",
+        f"  Trail distance:`{rt.trailing_stop_distance_atr:.2f} ATR`",
+        f"  Regime adapt:  `{adaptive_label}`",
         f"",
         f"*Alerts:*",
         f"  Entry:  `{'✅' if rt.alert_on_entry else '❌'}`",
@@ -212,8 +224,7 @@ def _format_config(rt: "RuntimeConfig") -> str:
         f"  SL Hit: `{'✅' if rt.alert_on_sl_hit else '❌'}`",
         f"  TP:     `{'✅' if rt.alert_on_tp else '❌'}`",
         f"",
-        f"Gunakan `/set <param> <value>` untuk ubah.",
-        f"Contoh: `/set threshold_5m 6.5`",
+        f"Gunakan `/set` untuk list parameter.",
     ]
     return "\n".join(lines)
 
@@ -332,23 +343,60 @@ def build_handlers(state: "MarketState", rt: "RuntimeConfig") -> list:
     async def cmd_set(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         """
         Usage: /set <param> <value>
-        Params: threshold_5m, bias_threshold, vwap_sensitivity, poc_sensitivity
+        Supports scoring, sensitivity, risk, and TP parameters.
         """
         if not ctx.args or len(ctx.args) < 2:
             await update.message.reply_text(
                 "Usage: `/set <param> <value>`\n\n"
-                "Params:\n"
-                "  `threshold_5m` — trigger scoring threshold (default 7.0)\n"
-                "  `bias_threshold` — 4h cascade bias threshold (default 3.0)\n"
+                "*Scoring:*\n"
+                "  `threshold_5m` — trigger threshold (default 7.0)\n"
+                "  `bias_threshold` — 4h cascade bias (default 3.0)\n"
                 "  `vwap_sensitivity` — VWAP sensitivity (default 20.0)\n"
-                "  `poc_sensitivity` — POC sensitivity (default 20.0)",
+                "  `poc_sensitivity` — POC sensitivity (default 20.0)\n\n"
+                "*Risk:*\n"
+                "  `risk_per_trade` — risk % per trade (0.01-0.05, default 0.02)\n"
+                "  `max_leverage` — leverage cap (1.0-10.0, default 5.0)\n"
+                "  `daily_loss_limit` — daily loss % (0.03-0.15, default 0.07)\n\n"
+                "*TP Strategy:*\n"
+                "  `tp1_size` — TP1 exit % (0.3-1.0, default 0.60)\n"
+                "  `trailing_stop` — trailing stop (on/off)\n"
+                "  `trail_distance` — trail ATR dist (0.3-2.0, default 0.75)\n"
+                "  `tp_adaptive` — regime-adaptive TP (on/off)",
                 parse_mode="Markdown"
             )
             return
 
         param = ctx.args[0].lower()
+        raw_val = ctx.args[1].lower()
+
+        # Boolean params
+        bool_params = {
+            "trailing_stop": "trailing_stop_enabled",
+            "tp_adaptive": "tp_regime_adaptive",
+        }
+        if param in bool_params:
+            if raw_val in ("on", "true", "1", "yes"):
+                bool_val = True
+            elif raw_val in ("off", "false", "0", "no"):
+                bool_val = False
+            else:
+                await update.message.reply_text(
+                    f"❌ Value harus `on` atau `off`.", parse_mode="Markdown"
+                )
+                return
+            attr = bool_params[param]
+            old_val = getattr(rt, attr)
+            setattr(rt, attr, bool_val)
+            logger.info("config_changed_via_telegram", param=attr, old=old_val, new=bool_val)
+            status = "ON ✅" if bool_val else "OFF ❌"
+            await update.message.reply_text(
+                f"✅ `{param}` diubah: `{status}`", parse_mode="Markdown"
+            )
+            return
+
+        # Numeric params
         try:
-            val = float(ctx.args[1])
+            val = float(raw_val)
         except ValueError:
             await update.message.reply_text(f"❌ Value harus numerik: `{ctx.args[1]}`", parse_mode="Markdown")
             return
@@ -358,11 +406,16 @@ def build_handlers(state: "MarketState", rt: "RuntimeConfig") -> list:
             "bias_threshold": ("bias_threshold", 1.0, 10.0),
             "vwap_sensitivity": ("vwap_sensitivity", 1.0, 500.0),
             "poc_sensitivity": ("poc_sensitivity", 1.0, 500.0),
+            "risk_per_trade": ("max_risk_per_trade", 0.01, 0.05),
+            "max_leverage": ("max_leverage", 1.0, 10.0),
+            "daily_loss_limit": ("daily_loss_limit", 0.03, 0.15),
+            "tp1_size": ("tp1_size_pct", 0.3, 1.0),
+            "trail_distance": ("trailing_stop_distance_atr", 0.3, 2.0),
         }
 
         if param not in param_map:
             await update.message.reply_text(
-                f"❌ Parameter `{param}` tidak dikenal.", parse_mode="Markdown"
+                f"❌ Parameter `{param}` tidak dikenal.\nKetik `/set` untuk list lengkap.", parse_mode="Markdown"
             )
             return
 
@@ -376,8 +429,20 @@ def build_handlers(state: "MarketState", rt: "RuntimeConfig") -> list:
         old_val = getattr(rt, attr)
         setattr(rt, attr, val)
         logger.info("config_changed_via_telegram", param=attr, old=old_val, new=val)
+
+        # Format display value
+        if param in ("risk_per_trade", "daily_loss_limit", "tp1_size"):
+            display_old = f"{old_val*100:.1f}%"
+            display_new = f"{val*100:.1f}%"
+        elif param == "max_leverage":
+            display_old = f"{old_val:.1f}x"
+            display_new = f"{val:.1f}x"
+        else:
+            display_old = f"{old_val}"
+            display_new = f"{val}"
+
         await update.message.reply_text(
-            f"✅ `{param}` diubah: `{old_val}` → `{val}`", parse_mode="Markdown"
+            f"✅ `{param}` diubah: `{display_old}` → `{display_new}`", parse_mode="Markdown"
         )
 
     async def cmd_dashboard(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -500,24 +565,33 @@ def build_handlers(state: "MarketState", rt: "RuntimeConfig") -> list:
         if rt.live_mode and config.IS_TESTNET:
             current_mode = "testnet"
 
+        trailing_label = "ON" if rt.trailing_stop_enabled else "OFF"
+        adaptive_label = "ON" if rt.tp_regime_adaptive else "OFF"
+
         msg = (
             "⚙️ *BAYESMARKET SETUP WIZARD*\n"
             "━━━━━━━━━━━━━━━━━━━━\n"
-            f"Current mode: {mode_c.get(current_mode, '⚪')} `{current_mode.upper()}`\n\n"
-            "*Current Configuration:*\n"
+            f"Mode: {mode_c.get(current_mode, '⚪')} `{current_mode.upper()}`\n\n"
+            "*Scoring:*\n"
+            f"  Threshold 5m: `{rt.scoring_threshold_5m}`\n"
+            f"  Bias 4h: `{rt.bias_threshold}`\n"
+            f"  VWAP/POC sens: `{rt.vwap_sensitivity}` / `{rt.poc_sensitivity}`\n\n"
+            "*Risk:*\n"
             f"  Capital: `${state.capital:,.2f}`\n"
-            f"  Trigger threshold (5m): `{rt.scoring_threshold_5m}`\n"
-            f"  Bias threshold (4h): `{rt.bias_threshold}`\n"
-            f"  VWAP sensitivity: `{rt.vwap_sensitivity}`\n"
-            f"  POC sensitivity: `{rt.poc_sensitivity}`\n"
-            f"  Max leverage: `{config.MAX_LEVERAGE}x`\n"
-            f"  Risk/trade: `{config.MAX_RISK_PER_TRADE*100:.1f}%`\n"
-            f"  Daily loss limit: `{config.DAILY_LOSS_LIMIT*100:.1f}%`\n"
-            f"  Database: `{config.DB_PATH}`\n"
-            f"  Telegram: `{'✅ Connected' if config.TELEGRAM_BOT_TOKEN else '❌ Not set'}`\n"
-            f"  HL Wallet: `{'✅ Set' if config.HL_PRIVATE_KEY else '❌ Not set'}`\n\n"
-            "Use the buttons below to adjust, or use `/set` for individual parameters.\n"
-            "Changes via `/set` take effect immediately (no restart needed)."
+            f"  Risk/trade: `{rt.max_risk_per_trade*100:.1f}%`\n"
+            f"  Max leverage: `{rt.max_leverage:.1f}x`\n"
+            f"  Daily loss limit: `{rt.daily_loss_limit*100:.1f}%`\n\n"
+            "*TP Strategy:*\n"
+            f"  TP1 size: `{rt.tp1_size_pct*100:.0f}%`\n"
+            f"  Trailing stop: `{trailing_label}`\n"
+            f"  Trail distance: `{rt.trailing_stop_distance_atr:.2f} ATR`\n"
+            f"  Regime adaptive: `{adaptive_label}`\n\n"
+            "*System:*\n"
+            f"  DB: `{config.DB_PATH}`\n"
+            f"  Telegram: `{'✅' if config.TELEGRAM_BOT_TOKEN else '❌'}`\n"
+            f"  HL Wallet: `{'✅' if config.HL_PRIVATE_KEY else '❌'}`\n\n"
+            "Use buttons or `/set <param> <value>` to adjust.\n"
+            "All changes take effect immediately."
         )
         kb = InlineKeyboardMarkup([
             [
@@ -532,6 +606,26 @@ def build_handlers(state: "MarketState", rt: "RuntimeConfig") -> list:
             [
                 InlineKeyboardButton("📊 Bias ▲", callback_data="setup_bias_up"),
                 InlineKeyboardButton("📊 Bias ▼", callback_data="setup_bias_down"),
+            ],
+            [
+                InlineKeyboardButton("⚡ Leverage ▲", callback_data="setup_leverage_up"),
+                InlineKeyboardButton("⚡ Leverage ▼", callback_data="setup_leverage_down"),
+            ],
+            [
+                InlineKeyboardButton("🎯 Risk ▲", callback_data="setup_risk_up"),
+                InlineKeyboardButton("🎯 Risk ▼", callback_data="setup_risk_down"),
+            ],
+            [
+                InlineKeyboardButton("📈 TP1% ▲", callback_data="setup_tp1_up"),
+                InlineKeyboardButton("📈 TP1% ▼", callback_data="setup_tp1_down"),
+            ],
+            [
+                InlineKeyboardButton(
+                    f"🔀 Trailing: {trailing_label}", callback_data="setup_toggle_trailing"
+                ),
+                InlineKeyboardButton(
+                    f"🔀 Adaptive: {adaptive_label}", callback_data="setup_toggle_adaptive"
+                ),
             ],
             [
                 InlineKeyboardButton("◀️ Main Menu", callback_data="main_menu"),
@@ -723,6 +817,65 @@ def build_handlers(state: "MarketState", rt: "RuntimeConfig") -> list:
             rt.bias_threshold = max(rt.bias_threshold - 0.5, 1.0)
             await query.edit_message_text(
                 f"📊 Bias threshold: `{rt.bias_threshold}`",
+                parse_mode="Markdown", reply_markup=config_menu_keyboard()
+            )
+
+        elif data == "setup_leverage_up":
+            rt.max_leverage = min(rt.max_leverage + 1.0, 10.0)
+            await query.edit_message_text(
+                f"⚡ Max leverage: `{rt.max_leverage:.1f}x`",
+                parse_mode="Markdown", reply_markup=config_menu_keyboard()
+            )
+
+        elif data == "setup_leverage_down":
+            rt.max_leverage = max(rt.max_leverage - 1.0, 1.0)
+            await query.edit_message_text(
+                f"⚡ Max leverage: `{rt.max_leverage:.1f}x`",
+                parse_mode="Markdown", reply_markup=config_menu_keyboard()
+            )
+
+        elif data == "setup_risk_up":
+            rt.max_risk_per_trade = min(rt.max_risk_per_trade + 0.005, 0.05)
+            await query.edit_message_text(
+                f"🎯 Risk/trade: `{rt.max_risk_per_trade*100:.1f}%`",
+                parse_mode="Markdown", reply_markup=config_menu_keyboard()
+            )
+
+        elif data == "setup_risk_down":
+            rt.max_risk_per_trade = max(rt.max_risk_per_trade - 0.005, 0.01)
+            await query.edit_message_text(
+                f"🎯 Risk/trade: `{rt.max_risk_per_trade*100:.1f}%`",
+                parse_mode="Markdown", reply_markup=config_menu_keyboard()
+            )
+
+        elif data == "setup_tp1_up":
+            rt.tp1_size_pct = min(rt.tp1_size_pct + 0.1, 1.0)
+            await query.edit_message_text(
+                f"📈 TP1 size: `{rt.tp1_size_pct*100:.0f}%`",
+                parse_mode="Markdown", reply_markup=config_menu_keyboard()
+            )
+
+        elif data == "setup_tp1_down":
+            rt.tp1_size_pct = max(rt.tp1_size_pct - 0.1, 0.3)
+            await query.edit_message_text(
+                f"📈 TP1 size: `{rt.tp1_size_pct*100:.0f}%`",
+                parse_mode="Markdown", reply_markup=config_menu_keyboard()
+            )
+
+        elif data == "setup_toggle_trailing":
+            rt.trailing_stop_enabled = not rt.trailing_stop_enabled
+            status = "ON ✅" if rt.trailing_stop_enabled else "OFF ❌"
+            await query.edit_message_text(
+                f"🔀 Trailing stop: `{status}`",
+                parse_mode="Markdown", reply_markup=config_menu_keyboard()
+            )
+
+        elif data == "setup_toggle_adaptive":
+            rt.tp_regime_adaptive = not rt.tp_regime_adaptive
+            status = "ON ✅" if rt.tp_regime_adaptive else "OFF ❌"
+            await query.edit_message_text(
+                f"🔀 Regime adaptive TP: `{status}`\n"
+                f"{'Ranging: 100% TP1 | Trending: partial + trailing' if rt.tp_regime_adaptive else 'Always partial TP1 + trailing to TP2'}",
                 parse_mode="Markdown", reply_markup=config_menu_keyboard()
             )
 

@@ -1,12 +1,15 @@
 """Position state tracking, partial exit handling."""
 
 import time
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import structlog
 
 from bayesmarket import config
 from bayesmarket.data.state import MarketState, Position, WallInfo
+
+if TYPE_CHECKING:
+    from bayesmarket.runtime import RuntimeConfig
 
 logger = structlog.get_logger()
 
@@ -23,10 +26,13 @@ def create_position(
     tp2_price: float,
     score_5m: Optional[float],
     score_15m: Optional[float],
+    runtime: Optional["RuntimeConfig"] = None,
 ) -> Position:
     """Create a new Position with TP sizes calculated from total size."""
-    tp1_size = size * config.TP1_SIZE_PCT
-    tp2_size = size * config.TP2_SIZE_PCT
+    tp1_pct = runtime.tp1_size_pct if runtime else config.TP1_SIZE_PCT
+    tp2_pct = 1.0 - tp1_pct
+    tp1_size = size * tp1_pct
+    tp2_size = size * tp2_pct
 
     return Position(
         side=side,

@@ -109,9 +109,9 @@ BayesMarket is an automated perpetual futures trading engine designed for **Hype
 ### Execution & Risk
 - **3-Layer SL** — Wall > POC > ATR with structural-only tightening
 - **Trailing Stop** — ATR-based trail activates after TP1 hit
-- **Dual TP** — TP1 at VWAP (60%), TP2 at 2x ATR (40%)
-- **2% Risk Rule** — 5x leverage cap, cooldown FSM
-- **7% Daily Limit** — circuit breaker with 12h pause
+- **Regime-Adaptive TP** — trending: partial TP1 + trailing, ranging: 100% TP1
+- **Configurable Risk** — risk%, leverage, TP split, daily limit via Telegram
+- **Cooldown FSM** — 3-loss cooldown, full stop, auto-recovery
 
 </td>
 </tr>
@@ -133,7 +133,7 @@ BayesMarket is an automated perpetual futures trading engine designed for **Hype
 - **Position Reconciliation** — restore orphaned exchange positions on restart
 - **Testnet** — real orders with mock USDC
 - **Railway PaaS** — one-click cloud deploy
-- **58 Unit Tests** — scoring, position, sizing, risk state machine
+- **72 Unit Tests** — scoring, position, sizing, risk, runtime config
 
 </td>
 </tr>
@@ -283,7 +283,7 @@ All indicators output **graduated scores** — no binary signals. Composite rang
 ### Position Sizing
 
 ```python
-risk = capital * 2%          # $20 on $1,000
+risk = capital * risk_pct    # configurable 1-5% (default 2%)
 sl_dist = abs(entry - sl)    # e.g., $450
 size = risk / sl_dist        # e.g., 0.044 BTC
 
@@ -291,8 +291,8 @@ size = risk / sl_dist        # e.g., 0.044 BTC
 if cooldown:  size *= 0.5    # Half size
 if funding:   size *= 0.75   # Caution tier
 
-# Hard cap
-size = min(size, capital * 5x / price)
+# Hard cap (configurable 1-10x, default 5x)
+size = min(size, capital * max_leverage / price)
 ```
 
 </td>
@@ -327,15 +327,18 @@ FULL STOP (no trading)
 | Emergency | **Pct** | 3% max distance cap |
 
 > **After entry:** SL only tightens on structural swing shifts. Never chases new walls. Min distance: 0.3x ATR.
-> **After TP1:** Trailing stop activates — trails 0.75x ATR behind best price, locks in profit.
+> **After TP1 (trending):** Trailing stop activates — trails behind best price, locks in profit.
+> **After TP1 (ranging):** 100% exit at TP1 — no trailing, immediately ready for next signal.
 
 ### Daily Protection
 
-| Rule | Value | Action |
-|------|-------|--------|
-| Daily loss limit | 7% | 12-hour pause |
-| Reset | 00:00 UTC | Daily counter reset |
-| Capital | Auto-compound | Shadow mode PnL compounds |
+| Rule | Default | Configurable | Action |
+|------|:-------:|:------------:|--------|
+| Daily loss limit | 7% | 3-15% via `/set` | 12-hour pause |
+| Risk per trade | 2% | 1-5% via `/set` | Per-entry risk cap |
+| Max leverage | 5x | 1-10x via `/set` | Hard leverage cap |
+| Reset | 00:00 UTC | — | Daily counter reset |
+| Capital | Auto-compound | — | Shadow mode PnL compounds |
 
 <br>
 
@@ -498,12 +501,33 @@ Access via Telegram `/analysis` or stored in the `trades` table.
 
 ### Runtime Hot-Reload (Telegram `/set`)
 
-| Parameter | Range | Default |
-|-----------|:-----:|:-------:|
-| `threshold_5m` | 1.0 - 15.0 | 7.0 |
-| `bias_threshold` | 1.0 - 10.0 | 3.0 |
-| `vwap_sensitivity` | 1.0 - 500.0 | 20.0 |
-| `poc_sensitivity` | 1.0 - 500.0 | 20.0 |
+All parameters below can be changed live via Telegram — no restart required.
+
+**Scoring:**
+
+| Parameter | Range | Default | Command |
+|-----------|:-----:|:-------:|---------|
+| `threshold_5m` | 1.0 - 15.0 | 7.0 | `/set threshold_5m 8.0` |
+| `bias_threshold` | 1.0 - 10.0 | 3.0 | `/set bias_threshold 4.0` |
+| `vwap_sensitivity` | 1.0 - 500.0 | 20.0 | `/set vwap_sensitivity 30` |
+| `poc_sensitivity` | 1.0 - 500.0 | 20.0 | `/set poc_sensitivity 30` |
+
+**Risk:**
+
+| Parameter | Range | Default | Command |
+|-----------|:-----:|:-------:|---------|
+| `risk_per_trade` | 0.01 - 0.05 | 0.02 (2%) | `/set risk_per_trade 0.03` |
+| `max_leverage` | 1.0 - 10.0 | 5.0 | `/set max_leverage 3` |
+| `daily_loss_limit` | 0.03 - 0.15 | 0.07 (7%) | `/set daily_loss_limit 0.05` |
+
+**TP Strategy:**
+
+| Parameter | Range | Default | Command |
+|-----------|:-----:|:-------:|---------|
+| `tp1_size` | 0.3 - 1.0 | 0.60 (60%) | `/set tp1_size 0.8` |
+| `trailing_stop` | on / off | on | `/set trailing_stop off` |
+| `trail_distance` | 0.3 - 2.0 | 0.75 ATR | `/set trail_distance 1.0` |
+| `tp_adaptive` | on / off | on | `/set tp_adaptive off` |
 
 <br>
 

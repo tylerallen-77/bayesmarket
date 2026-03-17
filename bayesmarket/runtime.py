@@ -37,6 +37,17 @@ class RuntimeConfig:
     vwap_sensitivity: float = 20.0    # matches config.VWAP_SENSITIVITY
     poc_sensitivity: float = 20.0     # matches config.POC_SENSITIVITY
 
+    # ── RISK PARAMETERS (hot-reload via Telegram /set) ────────────
+    max_risk_per_trade: float = 0.02     # 2% risk per trade (0.01 - 0.05)
+    max_leverage: float = 5.0            # leverage cap (1.0 - 10.0)
+    daily_loss_limit: float = 0.07       # 7% daily loss = pause (0.03 - 0.15)
+
+    # ── TP STRATEGY (hot-reload via Telegram /set) ────────────────
+    tp1_size_pct: float = 0.60           # TP1 exit size (0.3 - 1.0)
+    trailing_stop_enabled: bool = True   # trailing stop after TP1
+    trailing_stop_distance_atr: float = 0.75  # trail distance in ATR
+    tp_regime_adaptive: bool = True      # ranging=100% TP1, trending=partial+trailing
+
     # ── INTERNAL ──────────────────────────────────────────────────
     mode_switched_at: float = field(default_factory=time.time)
     mode_switched_by: str = "system"   # "system" | "telegram" | "api"

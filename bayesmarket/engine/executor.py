@@ -57,7 +57,7 @@ def _evaluate_entry(state: MarketState, storage: Storage) -> None:
 
     # ── Risk gate: use can_trade() to handle state expiry ────────
     from bayesmarket.risk.limits import can_trade
-    allowed, reason, risk_alerts = can_trade(state.risk, state.capital)
+    allowed, reason, risk_alerts = can_trade(state.risk, state.capital, runtime=rt)
     for event, details in risk_alerts:
         asyncio.create_task(_fire_risk_alert(event, details))
     if not allowed:
@@ -95,6 +95,7 @@ def _evaluate_entry(state: MarketState, storage: Storage) -> None:
         sl_price=sl_price,
         cooldown_active=state.risk.cooldown_active,
         funding_tier=state.funding_tier,
+        runtime=rt,
     )
     if size is None:
         return
@@ -150,6 +151,7 @@ def _evaluate_entry(state: MarketState, storage: Storage) -> None:
         tp2_price=tp2_price,
         score_5m=score_5m,
         score_15m=score_15m,
+        runtime=rt,
     )
     state.position = position
 
@@ -255,30 +257,63 @@ def _monitor_position(state: MarketState, storage: Storage) -> None:
             asyncio.create_task(_send_exit_alert(pos, mid, total_pnl, pnl_pct, "sl_hit", mode, diagnosis=diag))
         return
 
-    # ── TP1 check ─────────────────────────────────────────────────
+    # ── TP1 check (regime-adaptive strategy) ──────────────────────
     if check_tp1(pos, mid):
-        tp1_pnl = calculate_pnl(pos.side, pos.entry_price, pos.tp1_price, pos.tp1_size)
-        pos.tp1_hit = True                        # ← FIX: was never set before close
-        pos.remaining_size -= pos.tp1_size
-        pos.pnl_realized += tp1_pnl
-        state.capital += tp1_pnl                  # bank TP1 profit immediately
+        # Determine if we should close 100% at TP1 (ranging) or partial (trending)
+        use_full_exit_at_tp1 = False
+        if rt and rt.tp_regime_adaptive:
+            current_regime = _get_current_regime(state)
+            if current_regime == "ranging":
+                use_full_exit_at_tp1 = True
+                logger.info("tp1_regime_adaptive", regime="ranging", strategy="full_exit_100pct")
+        # Also full exit if tp1_size_pct >= 1.0 (user configured 100%)
+        tp1_pct = rt.tp1_size_pct if rt else config.TP1_SIZE_PCT
+        if tp1_pct >= 1.0:
+            use_full_exit_at_tp1 = True
 
-        logger.info(
-            f"[{mode}] tp1_hit",
-            price=round(pos.tp1_price, 1),
-            exit_size=round(pos.tp1_size, 6),
-            pnl=round(tp1_pnl, 2),
-            remaining=round(pos.remaining_size, 6),
-        )
+        if use_full_exit_at_tp1:
+            # Ranging: close 100% at TP1, no trailing, no TP2
+            full_pnl = calculate_pnl(pos.side, pos.entry_price, pos.tp1_price, pos.remaining_size)
+            pos.tp1_hit = True
+            pnl_pct = full_pnl / state.capital * 100 if state.capital > 0 else 0
 
-        if rt and rt.alert_on_tp:
-            asyncio.create_task(_send_tp1_alert(pos, tp1_pnl, mode))
+            logger.info(
+                f"[{mode}] tp1_full_exit",
+                price=round(pos.tp1_price, 1),
+                exit_size=round(pos.remaining_size, 6),
+                pnl=round(full_pnl, 2),
+                regime="ranging" if (rt and rt.tp_regime_adaptive) else "manual_100pct",
+            )
+
+            _close_position(state, storage, pos.tp1_price, "tp1_full_exit", full_pnl, pnl_pct)
+
+            if rt and rt.alert_on_tp:
+                asyncio.create_task(_send_exit_alert(pos, pos.tp1_price, full_pnl, pnl_pct, "tp1_full_exit", mode))
+            return
+        else:
+            # Trending: partial exit at TP1, keep remainder for TP2 + trailing
+            tp1_pnl = calculate_pnl(pos.side, pos.entry_price, pos.tp1_price, pos.tp1_size)
+            pos.tp1_hit = True
+            pos.remaining_size -= pos.tp1_size
+            pos.pnl_realized += tp1_pnl
+            state.capital += tp1_pnl                  # bank TP1 profit immediately
+
+            logger.info(
+                f"[{mode}] tp1_hit",
+                price=round(pos.tp1_price, 1),
+                exit_size=round(pos.tp1_size, 6),
+                pnl=round(tp1_pnl, 2),
+                remaining=round(pos.remaining_size, 6),
+            )
+
+            if rt and rt.alert_on_tp:
+                asyncio.create_task(_send_tp1_alert(pos, tp1_pnl, mode))
 
     # ── TP2 check ─────────────────────────────────────────────────
     if check_tp2(pos, mid):
         tp2_pnl = calculate_pnl(pos.side, pos.entry_price, pos.tp2_price, pos.tp2_size)
-        pos.tp2_hit = True                        # ← FIX: set flag before close
-        total_pnl = pos.pnl_realized + tp2_pnl    # ← FIX: pnl_realized = TP1 already banked
+        pos.tp2_hit = True
+        total_pnl = pos.pnl_realized + tp2_pnl
         pnl_pct = total_pnl / state.capital * 100 if state.capital > 0 else 0
 
         logger.info(
@@ -317,7 +352,8 @@ def _monitor_position(state: MarketState, storage: Storage) -> None:
             return
 
     # ── Trailing stop after TP1 (MOD-5) ───────────────────────────
-    if config.TRAILING_STOP_ENABLED and pos.tp1_hit and not pos.tp2_hit:
+    trailing_enabled = rt.trailing_stop_enabled if rt else config.TRAILING_STOP_ENABLED
+    if trailing_enabled and pos.tp1_hit and not pos.tp2_hit:
         _update_trailing_stop(state, pos, mid)
 
     # ── Wall health + structural SL tightening ────────────────────
@@ -581,6 +617,17 @@ def _determine_tp(
     return tp1, tp2
 
 
+# ── Regime helper ─────────────────────────────────────────────────────────────
+
+def _get_current_regime(state: MarketState) -> str:
+    """Get current regime from 5m or 15m signal snapshot."""
+    for tf_name in ["5m", "15m"]:
+        tf_state = state.tf_states.get(tf_name)
+        if tf_state and tf_state.signal:
+            return tf_state.signal.regime
+    return "trending"
+
+
 # ── Trailing stop (MOD-5) ─────────────────────────────────────────────────────
 
 def _update_trailing_stop(state: MarketState, pos: Position, mid: float) -> None:
@@ -595,6 +642,8 @@ def _update_trailing_stop(state: MarketState, pos: Position, mid: float) -> None
     if atr <= 0:
         return
 
+    rt = state.runtime
+    trail_dist = rt.trailing_stop_distance_atr if rt else config.TRAILING_STOP_DISTANCE_ATR
     entry = pos.entry_price
 
     if pos.side == "long":
@@ -609,7 +658,7 @@ def _update_trailing_stop(state: MarketState, pos: Position, mid: float) -> None
                 logger.info("trailing_stop_activated", side="long", hwm=round(pos.trailing_high_water, 1))
 
         if pos.trailing_active:
-            trail_sl = pos.trailing_high_water - config.TRAILING_STOP_DISTANCE_ATR * atr
+            trail_sl = pos.trailing_high_water - trail_dist * atr
             # Trailing SL only tightens (moves up for long)
             if trail_sl > pos.sl_price:
                 pos.sl_price = trail_sl
@@ -626,7 +675,7 @@ def _update_trailing_stop(state: MarketState, pos: Position, mid: float) -> None
                 logger.info("trailing_stop_activated", side="short", hwm=round(pos.trailing_high_water, 1))
 
         if pos.trailing_active:
-            trail_sl = pos.trailing_high_water + config.TRAILING_STOP_DISTANCE_ATR * atr
+            trail_sl = pos.trailing_high_water + trail_dist * atr
             # Trailing SL only tightens (moves down for short)
             if trail_sl < pos.sl_price:
                 pos.sl_price = trail_sl

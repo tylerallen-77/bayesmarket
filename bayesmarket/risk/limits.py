@@ -7,12 +7,15 @@ FIX CRITICAL-2: Removed asyncio.create_task() from synchronous functions.
 
 import time
 from datetime import date, datetime, timezone
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import structlog
 
 from bayesmarket import config
 from bayesmarket.data.state import RiskState
+
+if TYPE_CHECKING:
+    from bayesmarket.runtime import RuntimeConfig
 
 logger = structlog.get_logger()
 
@@ -20,7 +23,7 @@ logger = structlog.get_logger()
 _last_reset_date: date = date.min
 
 
-def can_trade(risk: RiskState, capital: float) -> tuple[bool, str, list[tuple[str, str]]]:
+def can_trade(risk: RiskState, capital: float, runtime: Optional["RuntimeConfig"] = None) -> tuple[bool, str, list[tuple[str, str]]]:
     """Check if trading is currently allowed. Handles state expiry.
 
     Returns (allowed, reason, pending_alerts).
@@ -57,13 +60,14 @@ def can_trade(risk: RiskState, capital: float) -> tuple[bool, str, list[tuple[st
             logger.info("cooldown_time_reset", elapsed_s=round(elapsed, 0))
             alerts.append(("cooldown_reset", f"Cooldown expired after {elapsed/60:.0f}m"))
 
-    # Check daily loss limit
-    if capital > 0 and risk.daily_pnl <= -(capital * config.DAILY_LOSS_LIMIT):
+    # Check daily loss limit (runtime-configurable)
+    daily_limit = runtime.daily_loss_limit if runtime else config.DAILY_LOSS_LIMIT
+    if capital > 0 and risk.daily_pnl <= -(capital * daily_limit):
         risk.daily_paused = True
         risk.daily_pause_until = now + config.DAILY_PAUSE_HOURS * 3600
         msg = (
             f"daily_pnl={risk.daily_pnl:.2f} "
-            f"limit={config.DAILY_LOSS_LIMIT*100:.0f}% "
+            f"limit={daily_limit*100:.0f}% "
             f"pause={config.DAILY_PAUSE_HOURS}h"
         )
         logger.warning("daily_limit_triggered", daily_pnl=risk.daily_pnl)

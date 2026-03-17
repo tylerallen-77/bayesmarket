@@ -71,6 +71,22 @@ def config_menu_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("⬇️ Threshold -0.5", callback_data="threshold_down"),
         ],
         [
+            InlineKeyboardButton("⚡ Leverage ▲", callback_data="setup_leverage_up"),
+            InlineKeyboardButton("⚡ Leverage ▼", callback_data="setup_leverage_down"),
+        ],
+        [
+            InlineKeyboardButton("🎯 Risk ▲", callback_data="setup_risk_up"),
+            InlineKeyboardButton("🎯 Risk ▼", callback_data="setup_risk_down"),
+        ],
+        [
+            InlineKeyboardButton("📈 TP1% ▲", callback_data="setup_tp1_up"),
+            InlineKeyboardButton("📈 TP1% ▼", callback_data="setup_tp1_down"),
+        ],
+        [
+            InlineKeyboardButton("🔀 Trailing", callback_data="setup_toggle_trailing"),
+            InlineKeyboardButton("🔀 Adaptive TP", callback_data="setup_toggle_adaptive"),
+        ],
+        [
             InlineKeyboardButton("🔔 Toggle Alerts", callback_data="toggle_alerts"),
         ],
         [InlineKeyboardButton("◀️ Kembali", callback_data="main_menu")],
