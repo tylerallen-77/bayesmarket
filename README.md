@@ -417,7 +417,7 @@ RISK STATE      | NORMAL      | W:3 L:0
 ### Deploy to Railway (Recommended for 24/7)
 
 Railway is a PaaS that runs your bot in the cloud. No server management needed.
-BayesMarket includes all Railway config files (`Procfile`, `railway.toml`, `nixpacks.toml`).
+BayesMarket includes all Railway config files (`Procfile`, `railway.toml`, `Dockerfile`).
 
 #### Step 1: Create Telegram Bot
 
@@ -732,10 +732,12 @@ bayesmarket/
 ├── .env.example           # Full env var template
 ├── .env.testnet           # Testnet configuration template
 ├── .env.railway           # Railway environment template
-├── Procfile               # Railway worker process
-├── railway.toml           # Railway deploy configuration
-├── nixpacks.toml          # Nixpacks build configuration
 └── CHANGELOG.md           # Improvement log
+
+# Repo root (outside bayesmarket/)
+Procfile                   # Railway worker process
+railway.toml               # Railway deploy configuration
+Dockerfile                 # Docker build for Railway/Railpack
 ```
 
 </details>
