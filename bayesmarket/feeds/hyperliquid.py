@@ -1,8 +1,9 @@
 """Hyperliquid WebSocket feeds: l2Book + trades.
 
+Uses aiohttp WebSocket client for better compatibility with Railway proxy.
+
 Fixes:
   - Wall pruning window uses config.WALL_PRUNE_SECONDS (> WALL_PERSISTENCE_SECONDS)
-    Previously walls were pruned at 3s but required 5s to be "valid" — impossible.
   - HL_L2_BOOK_LEVELS increased to 50 in config for better wall detection.
 """
 
@@ -11,11 +12,10 @@ import json
 import math
 import ssl
 import time
-from typing import Optional
 
+import aiohttp
 import certifi
 import structlog
-import websockets
 
 from bayesmarket import config
 from bayesmarket.data.state import BookLevel, MarketState, TradeEvent, WallInfo
@@ -31,36 +31,41 @@ def _create_ssl_context() -> ssl.SSLContext:
 async def hl_book_feed(state: MarketState) -> None:
     """Subscribe to Hyperliquid l2Book and update state + wall tracker."""
     backoff = 1
+    ssl_ctx = _create_ssl_context()
+
     while True:
         try:
-            async with websockets.connect(
-                config.HL_WS_URL,
-                ssl=_create_ssl_context(),
-                ping_interval=20,
-                ping_timeout=10,
-                close_timeout=5,
-            ) as ws:
-                sub_msg = json.dumps({
-                    "method": "subscribe",
-                    "subscription": {
-                        "type": "l2Book",
-                        "coin": config.COIN,
-                        "nSigFigs": config.HL_L2_SIG_FIGS,
-                        "mantissa": config.HL_L2_BOOK_LEVELS,
-                    },
-                })
-                await ws.send(sub_msg)
-                logger.info("hl_book_feed_connected", levels=config.HL_L2_BOOK_LEVELS)
-                backoff = 1
+            async with aiohttp.ClientSession() as session:
+                async with session.ws_connect(
+                    config.HL_WS_URL,
+                    ssl=ssl_ctx,
+                    heartbeat=20,
+                    timeout=aiohttp.ClientWSTimeout(ws_close=5),
+                ) as ws:
+                    sub_msg = json.dumps({
+                        "method": "subscribe",
+                        "subscription": {
+                            "type": "l2Book",
+                            "coin": config.COIN,
+                            "nSigFigs": config.HL_L2_SIG_FIGS,
+                            "mantissa": config.HL_L2_BOOK_LEVELS,
+                        },
+                    })
+                    await ws.send_str(sub_msg)
+                    logger.info("hl_book_feed_connected", levels=config.HL_L2_BOOK_LEVELS)
+                    backoff = 1
 
-                async for raw_msg in ws:
-                    try:
-                        msg = json.loads(raw_msg)
-                        _process_l2book(msg, state)
-                    except Exception as exc:
-                        logger.error("l2book_parse_failed", error=str(exc))
+                    async for raw_msg in ws:
+                        if raw_msg.type == aiohttp.WSMsgType.TEXT:
+                            try:
+                                msg = json.loads(raw_msg.data)
+                                _process_l2book(msg, state)
+                            except Exception as exc:
+                                logger.error("l2book_parse_failed", error=str(exc))
+                        elif raw_msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
+                            break
 
-        except (websockets.ConnectionClosed, ConnectionError, OSError) as exc:
+        except (aiohttp.WSServerHandshakeError, aiohttp.ClientError, OSError) as exc:
             logger.warning("hl_book_feed_disconnected", error=str(exc), backoff=backoff)
             asyncio.create_task(_ws_disconnect_alert("HL Book", str(exc)))
             await asyncio.sleep(backoff)
@@ -186,9 +191,6 @@ def _update_wall_tracker(state: MarketState) -> None:
                 ))
 
     # Step 4: Prune walls not seen recently
-    # FIX: use WALL_PRUNE_SECONDS (must be > WALL_PERSISTENCE_SECONDS)
-    # Old code used 3.0 hardcoded while WALL_PERSISTENCE_SECONDS was 5.0 → walls
-    # were always pruned before they could become "valid".
     prune_window = getattr(config, "WALL_PRUNE_SECONDS", config.WALL_PERSISTENCE_SECONDS + 2.0)
     state.tracked_walls = [w for w in new_tracked if now - w.last_seen < prune_window]
 
@@ -196,31 +198,36 @@ def _update_wall_tracker(state: MarketState) -> None:
 async def hl_trade_feed(state: MarketState) -> None:
     """Subscribe to Hyperliquid trades and update state.trades + synthetic builders."""
     backoff = 1
+    ssl_ctx = _create_ssl_context()
+
     while True:
         try:
-            async with websockets.connect(
-                config.HL_WS_URL,
-                ssl=_create_ssl_context(),
-                ping_interval=20,
-                ping_timeout=10,
-                close_timeout=5,
-            ) as ws:
-                sub_msg = json.dumps({
-                    "method": "subscribe",
-                    "subscription": {"type": "trades", "coin": config.COIN},
-                })
-                await ws.send(sub_msg)
-                logger.info("hl_trade_feed_connected")
-                backoff = 1
+            async with aiohttp.ClientSession() as session:
+                async with session.ws_connect(
+                    config.HL_WS_URL,
+                    ssl=ssl_ctx,
+                    heartbeat=20,
+                    timeout=aiohttp.ClientWSTimeout(ws_close=5),
+                ) as ws:
+                    sub_msg = json.dumps({
+                        "method": "subscribe",
+                        "subscription": {"type": "trades", "coin": config.COIN},
+                    })
+                    await ws.send_str(sub_msg)
+                    logger.info("hl_trade_feed_connected")
+                    backoff = 1
 
-                async for raw_msg in ws:
-                    try:
-                        msg = json.loads(raw_msg)
-                        _process_trades(msg, state)
-                    except Exception as exc:
-                        logger.error("trades_parse_failed", error=str(exc))
+                    async for raw_msg in ws:
+                        if raw_msg.type == aiohttp.WSMsgType.TEXT:
+                            try:
+                                msg = json.loads(raw_msg.data)
+                                _process_trades(msg, state)
+                            except Exception as exc:
+                                logger.error("trades_parse_failed", error=str(exc))
+                        elif raw_msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
+                            break
 
-        except (websockets.ConnectionClosed, ConnectionError, OSError) as exc:
+        except (aiohttp.WSServerHandshakeError, aiohttp.ClientError, OSError) as exc:
             logger.warning("hl_trade_feed_disconnected", error=str(exc), backoff=backoff)
             asyncio.create_task(_ws_disconnect_alert("HL Trades", str(exc)))
             await asyncio.sleep(backoff)
@@ -276,7 +283,7 @@ async def _ws_disconnect_alert(feed_name: str, error: str) -> None:
     _ws_alert_last[feed_name] = now
     try:
         from bayesmarket.telegram_bot.alerts import send_alert
-        msg = f"⚠️ *WS DISCONNECTED — {feed_name}*\n`{error[:100]}`\nReconnecting..."
+        msg = f"\u26a0\ufe0f *WS DISCONNECTED \u2014 {feed_name}*\n`{error[:100]}`\nReconnecting..."
         await send_alert(msg)
     except Exception:
         pass

@@ -13,7 +13,6 @@ from collections import deque
 import aiohttp
 import certifi
 import structlog
-import websockets
 
 from bayesmarket import config
 from bayesmarket.data.state import Candle, MarketState
@@ -135,26 +134,31 @@ async def binance_kline_feed(state: MarketState) -> None:
         interval_to_tf[tf_cfg["kline_interval"]] = tf_name
 
     backoff = 1
+    ssl_ctx = _create_ssl_context()
+
     while True:
         try:
-            async with websockets.connect(
-                ws_url,
-                ssl=_create_ssl_context(),
-                ping_interval=20,
-                ping_timeout=10,
-                close_timeout=5,
-            ) as ws:
-                logger.info("binance_kline_feed_connected")
-                backoff = 1
+            async with aiohttp.ClientSession() as session:
+                async with session.ws_connect(
+                    ws_url,
+                    ssl=ssl_ctx,
+                    heartbeat=20,
+                    timeout=aiohttp.ClientWSTimeout(ws_close=5),
+                ) as ws:
+                    logger.info("binance_kline_feed_connected")
+                    backoff = 1
 
-                async for raw_msg in ws:
-                    try:
-                        msg = json.loads(raw_msg)
-                        _process_binance_kline(msg, state, interval_to_tf)
-                    except Exception as exc:
-                        logger.error("binance_kline_parse_failed", error=str(exc))
+                    async for raw_msg in ws:
+                        if raw_msg.type == aiohttp.WSMsgType.TEXT:
+                            try:
+                                msg = json.loads(raw_msg.data)
+                                _process_binance_kline(msg, state, interval_to_tf)
+                            except Exception as exc:
+                                logger.error("binance_kline_parse_failed", error=str(exc))
+                        elif raw_msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
+                            break
 
-        except (websockets.ConnectionClosed, ConnectionError, OSError) as exc:
+        except (aiohttp.WSServerHandshakeError, aiohttp.ClientError, OSError) as exc:
             logger.warning(
                 "binance_kline_feed_disconnected",
                 error=str(exc),
