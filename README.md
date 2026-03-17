@@ -156,7 +156,7 @@ BayesMarket is an automated perpetual futures trading engine designed for **Hype
 ### Install & Run
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/bayesmarket.git
+git clone https://github.com/tylerallen-77/bayesmarket.git
 cd bayesmarket
 
 pip install -r bayesmarket/requirements.txt
@@ -411,21 +411,133 @@ RISK STATE      | NORMAL      | W:3 L:0
 | **Railway** | `railway` | Disabled | Telegram only | `/setup` command |
 | **VPS** | `vps` | Rich terminal | Terminal + Telegram | Terminal prompts |
 
-<details>
-<summary><b>Railway (PaaS)</b></summary>
+### Deploy to Railway (Recommended for 24/7)
 
-```bash
-# Files included: Procfile, railway.toml, nixpacks.toml
-# Set variables in Railway Dashboard → Service → Variables
-# Mount volume at /app/data for persistent SQLite
+Railway is a PaaS that runs your bot in the cloud. No server management needed.
+BayesMarket includes all Railway config files (`Procfile`, `railway.toml`, `nixpacks.toml`).
+
+#### Step 1: Create Telegram Bot
+
+You need a Telegram bot to control BayesMarket on Railway (no terminal available).
+
+```
+1. Open Telegram → search @BotFather
+2. Send /newbot
+3. Follow the prompts → choose a name (e.g., "BayesMarket Bot")
+4. BotFather replies with a token like: 7123456789:AAH...xyz
+   → Save this as TELEGRAM_BOT_TOKEN
+
+5. Open Telegram → search @userinfobot
+6. Send /start → it replies with your numeric user ID (e.g., 123456789)
+   → Save this as TELEGRAM_CHAT_ID
 ```
 
-See `.env.railway` for the full variable template.
+#### Step 2: Create Railway Project
 
-</details>
+```
+1. Go to https://railway.com → Sign up / Log in (GitHub OAuth recommended)
+2. Click "New Project" → "Deploy from GitHub repo"
+3. Select your fork of tylerallen-77/bayesmarket
+   (or connect the repo if not listed)
+4. Railway auto-detects nixpacks.toml and starts building
+```
+
+#### Step 3: Set Environment Variables
+
+Go to **Railway Dashboard → your service → Variables tab** and add:
+
+```env
+# Required
+DEPLOYMENT_ENV=railway
+TELEGRAM_BOT_TOKEN=7123456789:AAHxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+TELEGRAM_CHAT_ID=123456789
+
+# Optional (defaults are fine for shadow mode)
+LIVE_MODE=false
+SIMULATED_CAPITAL=1000.0
+COIN=BTC
+BINANCE_SYMBOL=BTCUSDT
+DB_PATH=/app/data/bayesmarket.db
+HL_REST_URL=https://api.hyperliquid.xyz
+HL_WS_URL=wss://api.hyperliquid.xyz/ws
+
+# Live/Testnet only (leave empty for shadow mode)
+HL_PRIVATE_KEY=
+HL_ACCOUNT_ADDRESS=
+```
+
+#### Step 4: Add Persistent Volume
+
+Without a volume, SQLite data is lost on every redeploy.
+
+```
+1. Railway Dashboard → your service → "Volumes" tab
+2. Click "New Volume"
+3. Mount path: /app/data
+4. Size: 1 GB (more than enough)
+5. Click "Create"
+```
+
+This stores `bayesmarket.db` persistently at `/app/data/bayesmarket.db`.
+
+#### Step 5: Deploy & Verify
+
+```
+1. Railway auto-deploys on push. Check "Deployments" tab for build logs.
+2. Once running, open Telegram → send /start to your bot
+3. Bot should reply with the main menu
+4. Send /status to verify it's connected to Hyperliquid
+5. Send /scores to see live cascade scores
+6. Send /dashboard auto to enable live push updates every 30s
+```
+
+#### Railway Telegram Commands Cheatsheet
+
+Once deployed, control everything via Telegram:
+
+```
+/setup              → Setup wizard (mode, thresholds, risk params)
+/status             → Position, PnL, capital, risk state
+/scores             → All 4 TF cascade scores
+/config             → View all active parameters
+/set <param> <val>  → Change any parameter live (no redeploy)
+/report 7d          → Performance report
+/dashboard auto     → Enable live push dashboard
+/analysis 7d        → Loss pattern analysis
+/live               → Switch to live mode (requires HL credentials)
+/shadow             → Switch back to shadow mode
+/pause / /resume    → Pause/resume trading
+/close              → Force close open position
+```
+
+#### Switching to Live Mode on Railway
+
+```
+1. Railway Dashboard → Variables → set:
+   LIVE_MODE=true
+   HL_PRIVATE_KEY=<your API wallet private key>
+   HL_ACCOUNT_ADDRESS=<your main wallet address>
+
+2. Or via Telegram: send /live and confirm
+
+Recommended: test on testnet first. Set these variables:
+   HL_REST_URL=https://api.hyperliquid-testnet.xyz
+   HL_WS_URL=wss://api.hyperliquid-testnet.xyz/ws
+   Get mock USDC at: https://app.hyperliquid-testnet.xyz/drip
+```
+
+#### Troubleshooting Railway
+
+| Issue | Solution |
+|-------|----------|
+| Bot not responding | Check Railway logs for errors. Verify `TELEGRAM_BOT_TOKEN` is correct. |
+| Data lost on redeploy | Add a volume mounted at `/app/data` (Step 4). |
+| Build fails | Check `requirements.txt` for version conflicts in Railway build logs. |
+| Memory limit | Railway free tier has 512MB. BayesMarket uses ~100-150MB. |
+| Bot starts but no trades | Normal — system needs 5-15 min to build klines before signals generate. |
 
 <details>
-<summary><b>VPS (Contabo / Oracle)</b></summary>
+<summary><b>VPS (Contabo / Oracle / any Linux server)</b></summary>
 
 ```bash
 cd bayesmarket/deploy
