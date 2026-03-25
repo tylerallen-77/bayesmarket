@@ -78,6 +78,7 @@ async def bootstrap_klines(state: MarketState) -> None:
                             interval=interval,
                             count=len(candles),
                         )
+                        logger.info("bootstrap_loaded", tf=tf_name, count=len(tf_state.klines))
                         break
 
                 except Exception as exc:
