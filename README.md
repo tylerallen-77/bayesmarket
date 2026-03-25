@@ -148,31 +148,102 @@ BayesMarket is an automated perpetual futures trading engine designed for **Hype
 
 ## Quick Start
 
-### Prerequisites
+```bash
+git clone https://github.com/tylerallen-77/bayesmarket.git
+cd bayesmarket
+pip install -r bayesmarket/requirements.txt
+python -m bayesmarket
+```
 
-- **Python 3.11+**
-- Internet connection (public WebSocket feeds)
-- No API keys needed for shadow mode
+That's it for shadow mode — no API keys, no `.env` file required.
 
-### Install & Run
+<br>
+
+---
+
+<br>
+
+## Local Setup (Detailed)
+
+Step-by-step guide to run BayesMarket on your local machine (Windows, macOS, or Linux).
+
+### Step 1: Prerequisites
+
+| Requirement | Notes |
+|-------------|-------|
+| **Python 3.11+** | Check with `python --version` |
+| **pip** | Comes with Python. Update: `python -m pip install --upgrade pip` |
+| **Internet** | Needs access to `api.hyperliquid.xyz` (WS) and `fapi.binance.com` (REST + WS) |
+| **Git** | For cloning the repo |
+
+> **No API keys needed for shadow mode.** All data feeds (l2Book, trades, klines) use public endpoints.
+
+### Step 2: Clone & Install
 
 ```bash
 git clone https://github.com/tylerallen-77/bayesmarket.git
 cd bayesmarket
-
 pip install -r bayesmarket/requirements.txt
+```
 
+<details>
+<summary><b>Windows with corporate proxy / Zscaler?</b></summary>
+
+If `pip install` fails with SSL certificate errors:
+
+```bash
+pip install --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org -r bayesmarket/requirements.txt
+```
+
+If WebSocket connections fail at runtime, you may need to configure your proxy to allow:
+- `wss://api.hyperliquid.xyz/ws`
+- `wss://fstream.binance.com/stream`
+- `https://fapi.binance.com/fapi/v1`
+
+</details>
+
+### Step 3: Environment Configuration (Optional)
+
+Shadow mode works out of the box with zero config. For customization, create a `.env` file:
+
+```bash
+cp bayesmarket/.env.example .env
+```
+
+**Shadow mode (default)** — no changes needed:
+
+```env
+LIVE_MODE=false
+SIMULATED_CAPITAL=1000.0
+DEPLOYMENT_ENV=local
+```
+
+**With Telegram control panel** (recommended):
+
+```env
+LIVE_MODE=false
+SIMULATED_CAPITAL=1000.0
+DEPLOYMENT_ENV=local
+
+# Get token from @BotFather, chat ID from @userinfobot
+TELEGRAM_BOT_TOKEN=your_token_here
+TELEGRAM_CHAT_ID=your_chat_id_here
+```
+
+**With web dashboard** (browser-based alternative to terminal):
+
+```env
+WEB_DASHBOARD=true
+PORT=8080
+```
+
+### Step 4: Run
+
+```bash
 python -m bayesmarket
 ```
 
-> **Windows with Zscaler/SSL issues?**
-> ```bash
-> pip install --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org -r bayesmarket/requirements.txt
-> ```
-
-### Startup Wizard
-
-On first launch, an interactive wizard guides you through configuration:
+On first launch, a startup wizard guides you through configuration:
 
 ```
   ╔══════════════════════════════════════════════════╗
@@ -192,6 +263,69 @@ On first launch, an interactive wizard guides you through configuration:
 | **Local / VPS** | Terminal prompts | Interactive stdin with ANSI colors |
 | **Railway** | Telegram `/setup` | Inline buttons, no TTY needed |
 | **Existing .env** | Skip option | Launch immediately with saved config |
+
+If the wizard crashes on Windows (Unicode encoding), add a `.env` file manually (Step 3) and the wizard will offer to skip.
+
+### Step 5: Verify Startup
+
+After launching, you should see these logs in order:
+
+```
+[info] system_starting          mode=SHADOW capital=1000.0 coin=BTC
+[info] bootstrapping_klines
+[info] bootstrap_klines_loaded  tf=5m   interval=1m  count=150
+[info] bootstrap_klines_loaded  tf=15m  interval=5m  count=150
+[info] bootstrap_klines_loaded  tf=1h   interval=15m count=100
+[info] bootstrap_klines_loaded  tf=4h   interval=1h  count=100
+[info] all_tasks_launching      count=15
+[info] hl_book_feed_connected   levels=50 sig_figs=5
+[info] hl_trade_feed_connected
+[info] binance_kline_feed_connected
+```
+
+**What connects where:**
+
+| Feed | Source | Data | Purpose |
+|------|--------|------|---------|
+| Bootstrap klines | Binance Futures REST | Historical OHLCV | RSI, MACD, EMA, HA, VWAP, POC, ATR |
+| Kline stream | Binance Futures WS | Live OHLCV updates | Continuous indicator updates |
+| l2Book | Hyperliquid WS | 50-level orderbook | OBI, Depth, Wall detection |
+| Trades | Hyperliquid WS | BTC trade stream | CVD calculation |
+| Funding | Hyperliquid REST | Funding rate | Funding filter (every 60s) |
+
+### Step 6: Reading the Dashboard
+
+After ~5 seconds, the Rich terminal dashboard appears with 4 panels:
+
+```
+┌─── 5m TRIGGER ───────────┐┌─── 15m TIMING ──────────┐
+│ CVD:  +1.23  OBI:  +0.45 ││ CVD:  +0.98  OBI:  +0.32│
+│ VWAP: +0.80  POC:  -0.20 ││ VWAP: +0.60  POC:  +0.15│
+│ RSI:  +0.35  MACD: +0.12 ││ RSI:  +0.28  MACD: +0.08│
+│ TOTAL: +5.2  SIGNAL: --- ││ TOTAL: +4.8  ZONE: NONE │
+├─── 1h CONTEXT ───────────┤├─── 4h BIAS ─────────────┤
+│ FILTER TF                ││ FILTER TF                │
+│ VWAP: +0.90  TOTAL: +3.1 ││ VWAP: +1.10  TOTAL: +4.5│
+│ CTX: CONFIRMED    REGIME ││ BIAS: LONG       REGIME  │
+└──────────────────────────┘└──────────────────────────┘
+ POS: FLAT | PnL: $0.00 | RISK: NORMAL | SRC: binance_futures
+```
+
+- **RSI/MACD/EMA should show values** (not `---`) in all 4 TFs after bootstrap
+- **Walls** appear as `Bid Wall $XX,XXX` or `Ask Wall $XX,XXX` when detected
+- **Kline source** in bottom bar should show `binance_futures`
+
+### Troubleshooting
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `bootstrap_klines_all_failed` | Binance unreachable (corporate firewall) | Use VPN or deploy to Railway. Indicators will be empty until synthetic klines build up (~30 min) |
+| `hl_book_feed_zero_messages` | HL WebSocket subscription rejected | Check internet access to `api.hyperliquid.xyz`. Check if VPN blocks WebSocket |
+| RSI/MACD/EMA show `---` | Not enough klines (bootstrap failed) | Ensure Binance Futures REST is accessible. Check logs for `bootstrap_klines_loaded` |
+| `UnicodeEncodeError` on startup | Windows terminal encoding (cp1252) | Create `.env` manually, wizard will skip. Or set `PYTHONIOENCODING=utf-8` |
+| Scores never reach threshold | Normal in low-volatility markets | Wait for active trading hours. Check `/scores` via Telegram |
+| `binance_kline_feed_disconnected` | Binance WS blocked | System falls back to synthetic klines from HL trades. Indicators still work but may be slower to populate for higher TFs |
+| Memory growing unbounded | Trade deque not pruning | Check `TRADE_TTL_SECONDS` in config (default 600s). Restart if needed |
 
 <br>
 
@@ -773,10 +907,11 @@ python -m bayesmarket.backtest --capital 500    # Different starting capital
 After running 10+ minutes in shadow mode:
 
 - [ ] Terminal shows 4-panel dashboard with live data
-- [ ] All 4 TF panels show updating scores
+- [ ] All 4 TF panels show updating scores (RSI/MACD/EMA not `---`)
 - [ ] Cascade state visible (BIAS direction, CTX confirmed, ZONE active)
-- [ ] Synthetic klines incrementing
+- [ ] Binance klines updating (check `binance_kline_closed` in logs)
 - [ ] Wall detection shows walls (or "none")
+- [ ] Kline source shows `binance_futures` in status bar
 - [ ] SQLite file created and growing
 - [ ] At least some LONG/SHORT signals generated
 - [ ] `python -m bayesmarket.report` outputs stats
