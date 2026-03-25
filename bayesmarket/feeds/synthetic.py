@@ -84,16 +84,15 @@ def feed_trade_to_builders(
 ) -> None:
     for tf_name, builder in builders.items():
         closed = builder.on_trade(trade)
+        # Binance WS klines are now the primary source
+        # Synthetic builder runs for internal tracking only
         if closed is not None:
-            tf_state = state.tf_states.get(tf_name)
-            if tf_state and not tf_state.using_fallback:
-                tf_state.klines.append(closed)
-                logger.debug(
-                    "synthetic_kline_closed",
-                    tf=tf_name,
-                    close=closed.close,
-                    volume=closed.volume,
-                )
+            logger.debug(
+                "synthetic_kline_closed_internal",
+                tf=tf_name,
+                close=closed.close,
+                volume=closed.volume,
+            )
 
 
 # ── Trade router — standalone function called from main.py ────────────────────

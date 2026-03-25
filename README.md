@@ -53,9 +53,9 @@ BayesMarket is an automated perpetual futures trading engine designed for **Hype
                                       │
               ┌───────────────────────┼───────────────────────┐
               │                       │                       │
-    Hyperliquid WS            Synthetic Klines       Binance Futures
-    ├─ l2Book (50lvl)         (from HL trades)       (fallback only)
-    └─ trades (BTC)                   │
+    Hyperliquid WS            Binance Futures        Synthetic Klines
+    ├─ l2Book (50lvl)         (primary klines)       (internal tracking)
+    └─ trades (BTC/CVD)              │
               │                       │
               └───────────┬───────────┘
                           ▼
@@ -101,7 +101,7 @@ BayesMarket is an automated perpetual futures trading engine designed for **Hype
 - **9 Proportional Indicators** — zero binary signals
 - **Cascade MTF** — 4h BIAS > 1h CTX > 15m ZONE > 5m TRIGGER
 - **Regime Detection** — trending vs ranging adaptive thresholds
-- **Synthetic Klines** — built from HL trades, zero price divergence
+- **Binance Futures Klines** — primary source, high-volume reference price
 
 </td>
 <td width="50%">
@@ -214,7 +214,7 @@ BayesMarket uses a **top-down cascade** where each timeframe plays a specific ro
   │    Mismatch → 5m BLOCKED
   │
   15m ━━ TIMING ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  │    Score > threshold & matches bias → entry zone ACTIVE (5min TTL)
+  │    Score > threshold & matches bias → entry zone ACTIVE (15min TTL)
   │    Zone expired or inactive → 5m BLOCKED
   │
   5m ━━ TRIGGER ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -625,10 +625,10 @@ Access via Telegram `/analysis` or stored in the `trades` table.
 | `MAX_RISK_PER_TRADE` | `2%` | Risk per trade |
 | `DAILY_LOSS_LIMIT` | `7%` | Daily drawdown breaker |
 | `CASCADE_BIAS_THRESHOLD` | `3.0` | 4h bias direction threshold |
-| `CASCADE_TIMING_ZONE_TTL` | `600s` | 15m zone time-to-live |
+| `CASCADE_TIMING_ZONE_TTL` | `900s` | 15m zone time-to-live |
 | `MAX_SL_TP_RATIO` | `3.0` | SL/TP distance cap |
 | `WALL_BIN_SIZE` | `$20` | Price binning for walls |
-| `KLINE_SOURCE` | `synthetic` | Primary kline source |
+| `KLINE_SOURCE` | `binance_futures` | Primary kline source |
 
 ### Runtime Hot-Reload (Telegram `/set`)
 
@@ -681,8 +681,8 @@ bayesmarket/
 │
 ├── feeds/
 │   ├── hyperliquid.py     # HL WebSocket: l2Book, trades + wall tracker
-│   ├── binance.py         # Binance FUTURES WebSocket + REST (fallback)
-│   └── synthetic.py       # Synthetic kline builder from HL trades
+│   ├── binance.py         # Binance FUTURES WebSocket + REST (primary klines)
+│   └── synthetic.py       # Synthetic kline builder from HL trades (internal tracking)
 │
 ├── indicators/
 │   ├── order_flow.py      # CVD (Z-Score + tanh), OBI, Liquidity Depth
@@ -820,7 +820,7 @@ After running 10+ minutes in shadow mode:
 | Telegram | python-telegram-bot 21+ |
 | Logging | structlog (structured, color-aware) |
 | Exchange | Hyperliquid (mainnet + testnet) |
-| Fallback | Binance Futures (klines only) |
+| Klines | Binance Futures (primary source) |
 | Deploy | Railway / VPS / Local |
 
 <br>

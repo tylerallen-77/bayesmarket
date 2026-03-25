@@ -48,10 +48,11 @@ async def hl_book_feed(state: MarketState) -> None:
                             "type": "l2Book",
                             "coin": config.COIN,
                             "nSigFigs": config.HL_L2_SIG_FIGS,
+                            "nLevels": config.HL_L2_BOOK_LEVELS,
                         },
                     })
                     await ws.send_str(sub_msg)
-                    logger.info("hl_book_feed_connected", nSigFigs=config.HL_L2_SIG_FIGS)
+                    logger.info("hl_book_feed_connected", levels=config.HL_L2_BOOK_LEVELS, sig_figs=config.HL_L2_SIG_FIGS)
                     backoff = 1
 
                     msg_count = 0
@@ -95,6 +96,16 @@ def _process_l2book(msg: dict, state: MarketState) -> None:
 
     raw_bids = levels[0]
     raw_asks = levels[1]
+
+    # DEBUG LOG — validate book data after subscription fix
+    if raw_bids or raw_asks:
+        logger.debug(
+            "l2book_update",
+            bid_levels=len(raw_bids),
+            ask_levels=len(raw_asks),
+            best_bid=raw_bids[0]["px"] if raw_bids else None,
+            best_ask=raw_asks[0]["px"] if raw_asks else None,
+        )
 
     state.bids = [
         BookLevel(
@@ -199,6 +210,17 @@ def _update_wall_tracker(state: MarketState) -> None:
     # Step 4: Prune walls not seen recently
     prune_window = getattr(config, "WALL_PRUNE_SECONDS", config.WALL_PERSISTENCE_SECONDS + 2.0)
     state.tracked_walls = [w for w in new_tracked if now - w.last_seen < prune_window]
+
+    # DEBUG LOG — newly detected walls
+    for wall in state.tracked_walls:
+        if wall.age_seconds < 2.0:
+            logger.info(
+                "wall_detected",
+                side=wall.side,
+                price=wall.bin_center,
+                size=wall.total_size,
+                age=round(wall.age_seconds, 1),
+            )
 
 
 async def hl_trade_feed(state: MarketState) -> None:

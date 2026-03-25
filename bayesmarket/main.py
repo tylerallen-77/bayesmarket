@@ -58,6 +58,7 @@ def _init_state(rt: RuntimeConfig) -> MarketState:
     """Initialize MarketState dengan TimeframeState untuk 4 TF."""
     state = MarketState(capital=config.SIMULATED_CAPITAL)
     state.runtime = rt  # attach runtime config ke state
+    state.kline_source = "binance_futures"  # Binance is now primary kline source
     for tf_name, tf_cfg in config.TIMEFRAMES.items():
         state.tf_states[tf_name] = TimeframeState(
             name=tf_name,

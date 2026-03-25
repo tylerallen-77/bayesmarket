@@ -204,13 +204,12 @@ def _process_binance_kline(
         closed=kline_data.get("x", False),
     )
 
-    # Only use Binance data when in fallback mode
-    if tf_state.using_fallback:
-        if candle.closed:
-            tf_state.klines.append(candle)
-            logger.debug("binance_fallback_kline_closed", tf=tf_name, close=candle.close)
-        else:
-            tf_state.current_kline = candle
+    # Binance klines are now the primary source (not fallback)
+    if candle.closed:
+        tf_state.klines.append(candle)
+        logger.debug("binance_kline_closed", tf=tf_name, close=candle.close)
+    else:
+        tf_state.current_kline = candle
 
 
 def check_fallback_status(state: MarketState) -> None:

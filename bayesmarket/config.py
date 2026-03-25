@@ -103,7 +103,7 @@ TIMEFRAMES = {
 # ══════════════════════════════════════════════════════════════════
 CASCADE_BIAS_THRESHOLD = 3.0       # 4h score > +3 = LONG only, < -3 = SHORT only
 CASCADE_CONTEXT_SAME_SIGN = True   # 1h must match 4h direction sign
-CASCADE_TIMING_ZONE_TTL = 600      # 15m zone valid for 10 minutes (was 5min, too short)
+CASCADE_TIMING_ZONE_TTL = 900      # 15m zone valid for 15 minutes (1x period of 15m candle)
 
 # ══════════════════════════════════════════════════════════════════
 # CONNECTIONS
@@ -118,7 +118,7 @@ DEPLOYMENT_ENV = os.getenv("DEPLOYMENT_ENV", "local")
 
 IS_RAILWAY = DEPLOYMENT_ENV == "railway"
 HL_L2_BOOK_LEVELS = 50          # ditingkatkan dari 20 untuk wall detection
-HL_L2_SIG_FIGS = 4              # 4 sig figs → $10 resolution natural di BTC
+HL_L2_SIG_FIGS = 5              # 5 sig figs → $1 resolution for precise wall detection
 
 BINANCE_FUTURES_WS_URL = "wss://fstream.binance.com/stream"
 BINANCE_FUTURES_REST_URL = "https://fapi.binance.com/fapi/v1"
@@ -129,7 +129,7 @@ HL_ACCOUNT_ADDRESS = os.getenv("HL_ACCOUNT_ADDRESS", "")
 # ══════════════════════════════════════════════════════════════════
 # KLINE SOURCE
 # ══════════════════════════════════════════════════════════════════
-KLINE_SOURCE = "synthetic"
+KLINE_SOURCE = "binance_futures"
 KLINE_FALLBACK_ENABLED = True
 KLINE_FALLBACK_STALE_SECONDS = 10
 
@@ -219,7 +219,7 @@ FULL_STOP_DURATION_SECONDS = 14400
 WALL_BIN_SIZE = 20.0           # ditingkatkan dari 10 → aggregasi lebih baik
 WALL_PERSISTENCE_SECONDS = 3.0 # diturunkan dari 5 → lebih responsif
 WALL_PRUNE_SECONDS = 6.0       # baru: prune setelah 6s (> persistence)
-WALL_MIN_SIZE_MULTIPLIER = 2.0 # diturunkan dari 3.0 → lebih sensitif
+WALL_MIN_SIZE_MULTIPLIER = 1.5 # diturunkan dari 2.0 → more sensitive for HL volume
 WALL_SL_OFFSET_PCT = 0.05
 
 POC_SL_OFFSET_PCT = 0.1
