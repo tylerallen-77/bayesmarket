@@ -163,176 +163,6 @@ That's it for shadow mode — no API keys, no `.env` file required.
 
 <br>
 
-## Local Setup (Detailed)
-
-Step-by-step guide to run BayesMarket on your local machine (Windows, macOS, or Linux).
-
-### Step 1: Prerequisites
-
-| Requirement | Notes |
-|-------------|-------|
-| **Python 3.11+** | Check with `python --version` |
-| **pip** | Comes with Python. Update: `python -m pip install --upgrade pip` |
-| **Internet** | Needs access to `api.hyperliquid.xyz` (WS) and `fapi.binance.com` (REST + WS) |
-| **Git** | For cloning the repo |
-
-> **No API keys needed for shadow mode.** All data feeds (l2Book, trades, klines) use public endpoints.
-
-### Step 2: Clone & Install
-
-```bash
-git clone https://github.com/tylerallen-77/bayesmarket.git
-cd bayesmarket
-pip install -r bayesmarket/requirements.txt
-```
-
-<details>
-<summary><b>Windows with corporate proxy / Zscaler?</b></summary>
-
-If `pip install` fails with SSL certificate errors:
-
-```bash
-pip install --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org -r bayesmarket/requirements.txt
-```
-
-If WebSocket connections fail at runtime, you may need to configure your proxy to allow:
-- `wss://api.hyperliquid.xyz/ws`
-- `wss://fstream.binance.com/stream`
-- `https://fapi.binance.com/fapi/v1`
-
-</details>
-
-### Step 3: Environment Configuration (Optional)
-
-Shadow mode works out of the box with zero config. For customization, create a `.env` file:
-
-```bash
-cp bayesmarket/.env.example .env
-```
-
-**Shadow mode (default)** — no changes needed:
-
-```env
-LIVE_MODE=false
-SIMULATED_CAPITAL=1000.0
-DEPLOYMENT_ENV=local
-```
-
-**With Telegram control panel** (recommended):
-
-```env
-LIVE_MODE=false
-SIMULATED_CAPITAL=1000.0
-DEPLOYMENT_ENV=local
-
-# Get token from @BotFather, chat ID from @userinfobot
-TELEGRAM_BOT_TOKEN=your_token_here
-TELEGRAM_CHAT_ID=your_chat_id_here
-```
-
-**With web dashboard** (browser-based alternative to terminal):
-
-```env
-WEB_DASHBOARD=true
-PORT=8080
-```
-
-### Step 4: Run
-
-```bash
-python -m bayesmarket
-```
-
-On first launch, a startup wizard guides you through configuration:
-
-```
-  ╔══════════════════════════════════════════════════╗
-  ║   BAYESMARKET — Startup Wizard                   ║
-  ╠══════════════════════════════════════════════════╣
-  ║  STEP 1   Operating Mode  (shadow/testnet/live)  ║
-  ║  STEP 2   Credentials     (testnet/live only)    ║
-  ║  STEP 3   Telegram Bot    (optional)             ║
-  ║  STEP 4   Parameters      (thresholds & risk)    ║
-  ║  STEP 5   Database        (SQLite path)          ║
-  ║  REVIEW   Confirm & save to .env                 ║
-  ╚══════════════════════════════════════════════════╝
-```
-
-| Platform | Wizard | Notes |
-|----------|--------|-------|
-| **Local / VPS** | Terminal prompts | Interactive stdin with ANSI colors |
-| **Railway** | Telegram `/setup` | Inline buttons, no TTY needed |
-| **Existing .env** | Skip option | Launch immediately with saved config |
-
-If the wizard crashes on Windows (Unicode encoding), add a `.env` file manually (Step 3) and the wizard will offer to skip.
-
-### Step 5: Verify Startup
-
-After launching, you should see these logs in order:
-
-```
-[info] system_starting          mode=SHADOW capital=1000.0 coin=BTC
-[info] bootstrapping_klines
-[info] bootstrap_klines_loaded  tf=5m   interval=1m  count=150
-[info] bootstrap_klines_loaded  tf=15m  interval=5m  count=150
-[info] bootstrap_klines_loaded  tf=1h   interval=15m count=100
-[info] bootstrap_klines_loaded  tf=4h   interval=1h  count=100
-[info] all_tasks_launching      count=15
-[info] hl_book_feed_connected   levels=50 sig_figs=5
-[info] hl_trade_feed_connected
-[info] binance_kline_feed_connected
-```
-
-**What connects where:**
-
-| Feed | Source | Data | Purpose |
-|------|--------|------|---------|
-| Bootstrap klines | Binance Futures REST | Historical OHLCV | RSI, MACD, EMA, HA, VWAP, POC, ATR |
-| Kline stream | Binance Futures WS | Live OHLCV updates | Continuous indicator updates |
-| l2Book | Hyperliquid WS | 50-level orderbook | OBI, Depth, Wall detection |
-| Trades | Hyperliquid WS | BTC trade stream | CVD calculation |
-| Funding | Hyperliquid REST | Funding rate | Funding filter (every 60s) |
-
-### Step 6: Reading the Dashboard
-
-After ~5 seconds, the Rich terminal dashboard appears with 4 panels:
-
-```
-┌─── 5m TRIGGER ───────────┐┌─── 15m TIMING ──────────┐
-│ CVD:  +1.23  OBI:  +0.45 ││ CVD:  +0.98  OBI:  +0.32│
-│ VWAP: +0.80  POC:  -0.20 ││ VWAP: +0.60  POC:  +0.15│
-│ RSI:  +0.35  MACD: +0.12 ││ RSI:  +0.28  MACD: +0.08│
-│ TOTAL: +5.2  SIGNAL: --- ││ TOTAL: +4.8  ZONE: NONE │
-├─── 1h CONTEXT ───────────┤├─── 4h BIAS ─────────────┤
-│ FILTER TF                ││ FILTER TF                │
-│ VWAP: +0.90  TOTAL: +3.1 ││ VWAP: +1.10  TOTAL: +4.5│
-│ CTX: CONFIRMED    REGIME ││ BIAS: LONG       REGIME  │
-└──────────────────────────┘└──────────────────────────┘
- POS: FLAT | PnL: $0.00 | RISK: NORMAL | SRC: binance_futures
-```
-
-- **RSI/MACD/EMA should show values** (not `---`) in all 4 TFs after bootstrap
-- **Walls** appear as `Bid Wall $XX,XXX` or `Ask Wall $XX,XXX` when detected
-- **Kline source** in bottom bar should show `binance_futures`
-
-### Troubleshooting
-
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| `bootstrap_klines_all_failed` | Binance unreachable (corporate firewall) | Use VPN or deploy to Railway. Indicators will be empty until synthetic klines build up (~30 min) |
-| `hl_book_feed_zero_messages` | HL WebSocket subscription rejected | Check internet access to `api.hyperliquid.xyz`. Check if VPN blocks WebSocket |
-| RSI/MACD/EMA show `---` | Not enough klines (bootstrap failed) | Ensure Binance Futures REST is accessible. Check logs for `bootstrap_klines_loaded` |
-| `UnicodeEncodeError` on startup | Windows terminal encoding (cp1252) | Create `.env` manually, wizard will skip. Or set `PYTHONIOENCODING=utf-8` |
-| Scores never reach threshold | Normal in low-volatility markets | Wait for active trading hours. Check `/scores` via Telegram |
-| `binance_kline_feed_disconnected` | Binance WS blocked | System falls back to synthetic klines from HL trades. Indicators still work but may be slower to populate for higher TFs |
-| Memory growing unbounded | Trade deque not pruning | Check `TRADE_TTL_SECONDS` in config (default 600s). Restart if needed |
-
-<br>
-
----
-
-<br>
-
 ## How It Works
 
 ### Cascade MTF Architecture
@@ -543,45 +373,167 @@ RISK STATE      | NORMAL      | W:3 L:0
 | Mode | `DEPLOYMENT_ENV` | Dashboard | Monitoring | Wizard |
 |:-----|:-----------------|:----------|:-----------|:-------|
 | **Local** | `local` | Rich terminal | Terminal + Telegram | Terminal prompts |
-| **Railway** | `railway` | Web dashboard (auto) | Web + Telegram | `/setup` command |
+| **Railway** | `railway` | Web dashboard (auto) | Web + Telegram | Telegram `/setup` |
 | **VPS** | `vps` | Rich terminal (+ web opt-in) | Terminal + Telegram | Terminal prompts |
 
-> **Web Dashboard:** On Railway, a browser-based dashboard is served automatically on the `PORT` assigned by Railway. On local/VPS, enable it with `WEB_DASHBOARD=true` in `.env`. Access at `http://localhost:8080` (or your Railway public URL).
+> **Web Dashboard:** On Railway, served automatically on the assigned `PORT`. On local/VPS, enable with `WEB_DASHBOARD=true`. Access at `http://localhost:8080` or your Railway public URL.
 
-### Deploy to Railway (Recommended for 24/7)
+---
 
-Railway is a PaaS that runs your bot in the cloud. No server management needed.
+### A. Local Setup
+
+<details>
+<summary><b>Step-by-step guide for Windows, macOS, or Linux</b></summary>
+
+#### Prerequisites
+
+| Requirement | Notes |
+|-------------|-------|
+| **Python 3.11+** | Check: `python --version` |
+| **pip** | Update: `python -m pip install --upgrade pip` |
+| **Git** | For cloning the repo |
+| **Internet** | Needs `api.hyperliquid.xyz` (WS) and `fapi.binance.com` (REST + WS) |
+
+> **No API keys needed for shadow mode.** All data feeds use public endpoints.
+
+#### 1. Clone & Install
+
+```bash
+git clone https://github.com/tylerallen-77/bayesmarket.git
+cd bayesmarket
+pip install -r bayesmarket/requirements.txt
+```
+
+<details>
+<summary>Windows with corporate proxy / Zscaler?</summary>
+
+```bash
+pip install --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org -r bayesmarket/requirements.txt
+```
+
+Ensure your proxy allows: `wss://api.hyperliquid.xyz/ws`, `wss://fstream.binance.com/stream`, `https://fapi.binance.com/fapi/v1`
+
+</details>
+
+#### 2. Environment Configuration (Optional)
+
+Shadow mode works out of the box. For customization:
+
+```bash
+cp bayesmarket/.env.example .env
+```
+
+**Shadow mode (default):**
+
+```env
+LIVE_MODE=false
+SIMULATED_CAPITAL=1000.0
+DEPLOYMENT_ENV=local
+```
+
+**With Telegram** (recommended):
+
+```env
+LIVE_MODE=false
+SIMULATED_CAPITAL=1000.0
+DEPLOYMENT_ENV=local
+TELEGRAM_BOT_TOKEN=your_token_here    # from @BotFather
+TELEGRAM_CHAT_ID=your_chat_id_here    # from @userinfobot
+```
+
+**With web dashboard:**
+
+```env
+WEB_DASHBOARD=true
+PORT=8080
+```
+
+#### 3. Run
+
+```bash
+python -m bayesmarket
+```
+
+On first launch, the startup wizard guides configuration (mode, credentials, Telegram, parameters, database). If the wizard crashes on Windows (Unicode encoding), create `.env` manually and the wizard will skip.
+
+#### 4. Verify Startup
+
+Expected log sequence:
+
+```
+[info] system_starting          mode=SHADOW capital=1000.0 coin=BTC
+[info] bootstrap_klines_loaded  tf=5m   interval=1m  count=150
+[info] bootstrap_klines_loaded  tf=15m  interval=5m  count=150
+[info] bootstrap_klines_loaded  tf=1h   interval=15m count=100
+[info] bootstrap_klines_loaded  tf=4h   interval=1h  count=100
+[info] hl_book_feed_connected   levels=50 sig_figs=5
+[info] hl_trade_feed_connected
+[info] binance_kline_feed_connected
+```
+
+**Data feeds:**
+
+| Feed | Source | Data | Purpose |
+|------|--------|------|---------|
+| Bootstrap | Binance Futures REST | Historical OHLCV | RSI, MACD, EMA, HA, VWAP, POC, ATR |
+| Kline stream | Binance Futures WS | Live OHLCV | Continuous indicator updates |
+| l2Book | Hyperliquid WS | 50-level orderbook | OBI, Depth, Wall detection |
+| Trades | Hyperliquid WS | BTC trade stream | CVD calculation |
+| Funding | Hyperliquid REST | Funding rate | Funding filter (every 60s) |
+
+#### 5. Reading the Dashboard
+
+After ~5 seconds, the Rich terminal renders 4 panels:
+
+```
+┌─── 5m TRIGGER ───────────┐┌─── 15m TIMING ──────────┐
+│ CVD:  +1.23  OBI:  +0.45 ││ CVD:  +0.98  OBI:  +0.32│
+│ VWAP: +0.80  POC:  -0.20 ││ VWAP: +0.60  POC:  +0.15│
+│ RSI:  +0.35  MACD: +0.12 ││ RSI:  +0.28  MACD: +0.08│
+│ TOTAL: +5.2  SIGNAL: --- ││ TOTAL: +4.8  ZONE: NONE │
+├─── 1h CONTEXT ───────────┤├─── 4h BIAS ─────────────┤
+│ FILTER TF                ││ FILTER TF                │
+│ VWAP: +0.90  TOTAL: +3.1 ││ VWAP: +1.10  TOTAL: +4.5│
+│ CTX: CONFIRMED    REGIME ││ BIAS: LONG       REGIME  │
+└──────────────────────────┘└──────────────────────────┘
+ POS: FLAT | PnL: $0.00 | RISK: NORMAL | SRC: binance_futures
+```
+
+- RSI/MACD/EMA should show values (not `---`) after bootstrap
+- Bottom bar shows `binance_futures` as kline source
+
+</details>
+
+---
+
+### B. Railway (Recommended for 24/7)
+
+<details>
+<summary><b>Cloud PaaS — no server management, auto-deploy on push</b></summary>
+
 BayesMarket includes all Railway config files (`Procfile`, `railway.toml`, `Dockerfile`).
 
-#### Step 1: Create Telegram Bot
+#### 1. Create Telegram Bot
 
-You need a Telegram bot to control BayesMarket on Railway (no terminal available).
-
-```
-1. Open Telegram → search @BotFather
-2. Send /newbot
-3. Follow the prompts → choose a name (e.g., "BayesMarket Bot")
-4. BotFather replies with a token like: 7123456789:AAH...xyz
-   → Save this as TELEGRAM_BOT_TOKEN
-
-5. Open Telegram → search @userinfobot
-6. Send /start → it replies with your numeric user ID (e.g., 123456789)
-   → Save this as TELEGRAM_CHAT_ID
-```
-
-#### Step 2: Create Railway Project
+Required on Railway (no terminal access):
 
 ```
-1. Go to https://railway.com → Sign up / Log in (GitHub OAuth recommended)
-2. Click "New Project" → "Deploy from GitHub repo"
+1. Telegram → @BotFather → /newbot → copy token
+2. Telegram → @userinfobot → /start → copy chat ID
+```
+
+#### 2. Create Railway Project
+
+```
+1. https://railway.com → Sign up (GitHub OAuth recommended)
+2. "New Project" → "Deploy from GitHub repo"
 3. Select your fork of tylerallen-77/bayesmarket
-   (or connect the repo if not listed)
-4. Railway auto-detects nixpacks.toml and starts building
+4. Railway auto-detects config and starts building
 ```
 
-#### Step 3: Set Environment Variables
+#### 3. Set Environment Variables
 
-Go to **Railway Dashboard → your service → Variables tab** and add:
+Railway Dashboard → your service → **Variables tab**:
 
 ```env
 # Required
@@ -589,108 +541,177 @@ DEPLOYMENT_ENV=railway
 TELEGRAM_BOT_TOKEN=7123456789:AAHxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 TELEGRAM_CHAT_ID=123456789
 
-# Optional (defaults are fine for shadow mode)
+# Optional (defaults fine for shadow mode)
 LIVE_MODE=false
 SIMULATED_CAPITAL=1000.0
-COIN=BTC
-BINANCE_SYMBOL=BTCUSDT
 DB_PATH=/app/data/bayesmarket.db
-HL_REST_URL=https://api.hyperliquid.xyz
-HL_WS_URL=wss://api.hyperliquid.xyz/ws
-
-# Live/Testnet only (leave empty for shadow mode)
-HL_PRIVATE_KEY=
-HL_ACCOUNT_ADDRESS=
 ```
 
-#### Step 4: Add Persistent Volume
+#### 4. Add Persistent Volume
 
 Without a volume, SQLite data is lost on every redeploy.
 
 ```
-1. Railway Dashboard → your service → "Volumes" tab
-2. Click "New Volume"
-3. Mount path: /app/data
-4. Size: 1 GB (more than enough)
-5. Click "Create"
+Railway Dashboard → "Volumes" tab → "New Volume"
+Mount path: /app/data   |   Size: 1 GB
 ```
 
-This stores `bayesmarket.db` persistently at `/app/data/bayesmarket.db`.
-
-#### Step 5: Enable Public URL (Web Dashboard)
+#### 5. Enable Public URL (Web Dashboard)
 
 ```
-1. Railway Dashboard → your service → "Settings" tab
-2. Under "Networking" → click "Generate Domain"
-3. Railway assigns a public URL like: bayesmarket-production-xxxx.up.railway.app
-4. Open that URL in your browser → live web dashboard with real-time updates
-5. The dashboard auto-refreshes every 3 seconds via SSE (Server-Sent Events)
+Railway Dashboard → "Settings" → "Networking" → "Generate Domain"
+→ Opens at: bayesmarket-production-xxxx.up.railway.app
 ```
 
-> The web dashboard has 3 tabs:
-> - **Dashboard** — live 4-panel scores (SSE, 3s auto-refresh), position, risk state, cascade info
-> - **Config** — read-only deployment status (shadow/testnet/live), scoring, risk, TP strategy
-> - **Trades** — equity curve chart, summary stats, recent trade history table
+The web dashboard has 3 tabs: **Dashboard** (live scores, SSE 3s), **Config** (read-only), **Trades** (equity curve + history).
 
-#### Step 6: Deploy & Verify
+#### 6. Verify
 
 ```
-1. Railway auto-deploys on push. Check "Deployments" tab for build logs.
-2. Once running, open your Railway public URL → web dashboard should load
-3. Open Telegram → send /start to your bot
-4. Bot should reply with the main menu
-5. Send /status to verify it's connected to Hyperliquid
-6. Send /scores to see live cascade scores
-7. Send /dashboard auto to enable Telegram push updates every 30s
+1. Check "Deployments" tab for build logs
+2. Open Railway URL → web dashboard loads
+3. Telegram → /start → bot replies with main menu
+4. /status → confirms connection to Hyperliquid
+5. /dashboard auto → enable 30s push updates
 ```
 
-#### Railway Telegram Commands Cheatsheet
-
-Once deployed, control everything via Telegram:
+#### Telegram Commands Cheatsheet
 
 ```
-/setup              → Setup wizard (mode, thresholds, risk params)
+/setup              → Setup wizard (mode, thresholds, risk)
 /status             → Position, PnL, capital, risk state
 /scores             → All 4 TF cascade scores
-/config             → View all active parameters
 /set <param> <val>  → Change any parameter live (no redeploy)
 /report 7d          → Performance report
 /dashboard auto     → Enable live push dashboard
 /analysis 7d        → Loss pattern analysis
-/live               → Switch to live mode (requires HL credentials)
-/shadow             → Switch back to shadow mode
+/live / /shadow     → Switch trading mode
 /pause / /resume    → Pause/resume trading
 /close              → Force close open position
 ```
 
-#### Switching to Live Mode on Railway
-
-```
-1. Railway Dashboard → Variables → set:
-   LIVE_MODE=true
-   HL_PRIVATE_KEY=<your API wallet private key>
-   HL_ACCOUNT_ADDRESS=<your main wallet address>
-
-2. Or via Telegram: send /live and confirm
-
-Recommended: test on testnet first. Set these variables:
-   HL_REST_URL=https://api.hyperliquid-testnet.xyz
-   HL_WS_URL=wss://api.hyperliquid-testnet.xyz/ws
-   Get mock USDC at: https://app.hyperliquid-testnet.xyz/drip
-```
-
-#### Troubleshooting Railway
+#### Troubleshooting
 
 | Issue | Solution |
 |-------|----------|
-| Bot not responding | Check Railway logs for errors. Verify `TELEGRAM_BOT_TOKEN` is correct. |
-| Data lost on redeploy | Add a volume mounted at `/app/data` (Step 4). |
-| Build fails | Check `requirements.txt` for version conflicts in Railway build logs. |
-| Memory limit | Railway free tier has 512MB. BayesMarket uses ~100-150MB. |
-| Bot starts but no trades | Normal — system needs 5-15 min to build klines before signals generate. |
+| Bot not responding | Check logs. Verify `TELEGRAM_BOT_TOKEN`. |
+| Data lost on redeploy | Add volume at `/app/data`. |
+| Build fails | Check `requirements.txt` in build logs. |
+| Memory limit | Free tier 512MB. BayesMarket uses ~100-150MB. |
+| No trades after 15 min | Normal — klines need time to populate. |
+
+</details>
+
+---
+
+### C. Testnet (Recommended Before Live)
 
 <details>
-<summary><b>VPS (Contabo / Oracle / any Linux server)</b></summary>
+<summary><b>Real orders with mock USDC on Hyperliquid Testnet</b></summary>
+
+Testnet uses the same code — only environment variables change. No code modifications needed.
+
+#### 1. Get Testnet Credentials
+
+```
+1. Go to https://app.hyperliquid-testnet.xyz
+2. Connect your wallet (MetaMask or any EVM wallet)
+3. Get mock USDC: https://app.hyperliquid-testnet.xyz/drip
+   → Drip gives you free testnet USDC to trade with
+4. Create API wallet:
+   a. Go to https://app.hyperliquid-testnet.xyz/API
+   b. Click "Create API Wallet"
+   c. Copy the generated private key → HL_PRIVATE_KEY
+   d. Your main wallet address → HL_ACCOUNT_ADDRESS
+```
+
+> **API wallet vs main wallet:** The API wallet is a sub-key that can only trade — it cannot withdraw funds. Always use an API wallet, never your main wallet private key.
+
+#### 2. Configure Environment
+
+**Local (`.env` file):**
+
+```env
+LIVE_MODE=true
+DEPLOYMENT_ENV=local
+
+# Testnet endpoints
+HL_REST_URL=https://api.hyperliquid-testnet.xyz
+HL_WS_URL=wss://api.hyperliquid-testnet.xyz/ws
+
+# Testnet credentials
+HL_PRIVATE_KEY=0xYOUR_TESTNET_API_WALLET_PRIVATE_KEY
+HL_ACCOUNT_ADDRESS=0xYOUR_MAIN_WALLET_ADDRESS
+
+# Optional but recommended
+TELEGRAM_BOT_TOKEN=your_token
+TELEGRAM_CHAT_ID=your_chat_id
+SIMULATED_CAPITAL=1000.0
+```
+
+**Railway (Variables tab):**
+
+```env
+LIVE_MODE=true
+DEPLOYMENT_ENV=railway
+HL_REST_URL=https://api.hyperliquid-testnet.xyz
+HL_WS_URL=wss://api.hyperliquid-testnet.xyz/ws
+HL_PRIVATE_KEY=0xYOUR_TESTNET_API_WALLET_PRIVATE_KEY
+HL_ACCOUNT_ADDRESS=0xYOUR_MAIN_WALLET_ADDRESS
+TELEGRAM_BOT_TOKEN=your_token
+TELEGRAM_CHAT_ID=your_chat_id
+```
+
+#### 3. Run & Verify
+
+```bash
+python -m bayesmarket
+```
+
+Expected logs:
+
+```
+[info] system_starting          mode=LIVE capital=<from_exchange> coin=BTC
+[info] exchange_connected       network=testnet
+[info] capital_fetched           account_value=$1000.00
+```
+
+**What to verify on testnet:**
+
+| Check | How |
+|-------|-----|
+| Capital fetched from exchange | Log shows `capital_fetched` with your drip amount |
+| Orders placed correctly | Telegram alerts show entry/SL/TP orders |
+| SL/TP triggers work | Wait for a trade or use `/close` to test exit |
+| Position reconciliation | Restart bot while position open — should recover |
+| Telegram commands work | `/status`, `/scores`, `/config` respond correctly |
+
+#### 4. Switching Between Networks
+
+| Network | `HL_REST_URL` | `HL_WS_URL` |
+|---------|---------------|-------------|
+| **Testnet** | `https://api.hyperliquid-testnet.xyz` | `wss://api.hyperliquid-testnet.xyz/ws` |
+| **Mainnet** | `https://api.hyperliquid.xyz` | `wss://api.hyperliquid.xyz/ws` |
+
+To switch: change the two URL variables and update credentials. Testnet and mainnet use separate API wallets.
+
+#### 5. Common Testnet Issues
+
+| Issue | Solution |
+|-------|----------|
+| `insufficient_margin` | Drip more testnet USDC at the faucet link above |
+| `invalid_api_key` | Ensure you copied the API wallet key, not the main wallet key |
+| Orders not filling | Testnet has low liquidity — widen entry price offset or wait |
+| `connection_refused` | Testnet may be down for maintenance — check HL Discord |
+
+</details>
+
+---
+
+### D. VPS
+
+<details>
+<summary><b>Contabo / Oracle / any Linux server</b></summary>
 
 ```bash
 cd bayesmarket/deploy
@@ -702,22 +723,19 @@ See `bayesmarket/deploy/VPS_GUIDE.md` for detailed instructions.
 
 </details>
 
-<details>
-<summary><b>Testnet</b></summary>
+---
 
-Switch to Hyperliquid testnet with env vars only — no code changes:
+### Troubleshooting (All Platforms)
 
-```bash
-LIVE_MODE=true
-HL_REST_URL=https://api.hyperliquid-testnet.xyz
-HL_WS_URL=wss://api.hyperliquid-testnet.xyz/ws
-HL_PRIVATE_KEY=<testnet API wallet key>
-HL_ACCOUNT_ADDRESS=<testnet main wallet address>
-```
-
-Get mock USDC at https://app.hyperliquid-testnet.xyz/drip
-
-</details>
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `bootstrap_klines_all_failed` | Binance unreachable (firewall) | Use VPN or deploy to Railway |
+| `hl_book_feed_zero_messages` | HL WS rejected | Check access to `api.hyperliquid.xyz` |
+| RSI/MACD/EMA show `---` | Bootstrap failed | Ensure Binance Futures REST accessible |
+| `UnicodeEncodeError` | Windows cp1252 encoding | Set `PYTHONIOENCODING=utf-8` or create `.env` manually |
+| Scores never reach threshold | Low volatility | Wait for active hours. Check `/scores` |
+| `binance_kline_feed_disconnected` | WS blocked | Falls back to synthetic klines (slower for higher TFs) |
+| Memory growing unbounded | Deque not pruning | Check `TRADE_TTL_SECONDS` (default 600s) |
 
 <br>
 
